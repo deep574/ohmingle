@@ -11,7 +11,7 @@ function ChatPage() {
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [showReport, setShowReport] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isMobile, setIsMobile] = useState(true);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
