@@ -2,18 +2,10 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import io from 'socket.io-client';
 
-// ✅ RELIABLE mobile detection - checks touch AND screen width
-function checkIsMobile() {
-  const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  const isNarrow = window.innerWidth < 1024;
-  return hasTouch || isNarrow;
-}
-
 function ChatPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { interests = [] } = location.state || {};
-  const gender = (location.state && location.state.gender) || 'User';
 
   const [status, setStatus] = useState('idle');
   const [messages, setMessages] = useState([]);
@@ -22,7 +14,7 @@ function ChatPage() {
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [showReport, setShowReport] = useState(false);
-  const [isMobile, setIsMobile] = useState(checkIsMobile);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -32,17 +24,17 @@ function ChatPage() {
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
-    const handleResize = () => setIsMobile(checkIsMobile());
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const iceServers = useRef({
+  const iceServers = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
     ],
-  });
+  };
 
   const cleanupPeer = useCallback(() => {
     if (peerConnectionRef.current) {
@@ -53,7 +45,7 @@ function ChatPage() {
   }, []);
 
   const createPeerConnection = useCallback(() => {
-    const pc = new RTCPeerConnection(iceServers.current);
+    const pc = new RTCPeerConnection(iceServers);
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track =>
         pc.addTrack(track, localStreamRef.current)
@@ -69,6 +61,7 @@ function ChatPage() {
     };
     peerConnectionRef.current = pc;
     return pc;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const createOffer = useCallback(async () => {
@@ -100,10 +93,7 @@ function ChatPage() {
     };
     startCamera();
 
-    const socket = io('https://ohmingle-backend-production.up.railway.app', {
-      transports: ['websocket', 'polling'],
-      forceNew: true
-    });
+    const socket = io('http://localhost:3001', { transports: ['websocket', 'polling'], forceNew: true });
     socketRef.current = socket;
 
     socket.on('connect', () => console.log('✅ Connected:', socket.id));
@@ -111,7 +101,7 @@ function ChatPage() {
     socket.on('waiting', () => setStatus('waiting'));
     socket.on('strangerFound', async ({ role }) => {
       setStatus('connected');
-      setMessages([{ text: "✨ You're now chatting with someone new!", system: true }]);
+      setMessages([{ text: "✨ You're now chatting with someone new", system: true }]);
       if (role === 'caller') await createOffer();
     });
     socket.on('offer', async (offer) => await handleOffer(offer));
@@ -130,7 +120,7 @@ function ChatPage() {
     socket.on('strangerLeft', () => {
       setStatus('strangerLeft');
       cleanupPeer();
-      setMessages(prev => [...prev, { text: 'Stranger disconnected.', system: true }]);
+      setMessages(prev => [...prev, { text: 'Stranger has disconnected.', system: true }]);
     });
 
     return () => {
@@ -197,6 +187,7 @@ function ChatPage() {
     navigate('/');
   };
 
+  // Report Modal (shared)
   const ReportModal = () => (
     <div style={s.modalOverlay}>
       <div style={s.modal}>
@@ -210,252 +201,139 @@ function ChatPage() {
     </div>
   );
 
-  // ════════════════════════════════════════════
-  // MOBILE LAYOUT
-  // ════════════════════════════════════════════
+  // ── MOBILE LAYOUT (Omegle-style) ──────────────────────────────────────────
   if (isMobile) {
     return (
-      <div style={{
-        position: 'fixed',
-        top: 0, left: 0,
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        background: '#000',
-        fontFamily: 'Segoe UI, sans-serif',
-        overflow: 'hidden',
-      }}>
+      <div style={s.mobContainer}>
         {showReport && <ReportModal />}
 
         {/* Header */}
-        <div style={{
-          display: 'flex', justifyContent: 'space-between',
-          alignItems: 'center', padding: '8px 14px',
-          background: '#000', flexShrink: 0, zIndex: 10,
-          height: '42px',
-        }}>
-          <span style={{ fontSize: '20px', fontWeight: '900', color: 'white', cursor: 'pointer' }} onClick={goHome}>
-            Ohm<span style={{ color: '#a855f7' }}>ingle</span>
+        <div style={s.mobHeader}>
+          <span style={s.mobLogo} onClick={goHome}>
+            Ohm<span style={{ color: '#7c3aed' }}>ingle</span>
           </span>
-          <span style={{ color: '#10b981', fontSize: '13px', fontWeight: '700' }}>
-            ● {onlineCount} online
-          </span>
+          <span style={s.mobOnline}>{onlineCount}+</span>
         </div>
 
-        {/* ── STRANGER VIDEO — full width, tall ── */}
-        <div style={{
-          width: '100%',
-          height: '45%',
-          position: 'relative',
-          background: '#111',
-          flexShrink: 0,
-          overflow: 'hidden',
-        }}>
-          <video ref={remoteVideoRef} autoPlay playsInline style={{
-            width: '100%', height: '100%',
-            objectFit: 'cover', display: 'block',
-          }} />
+        {/* Video Box - Fixed height like Omegle */}
+        <div style={s.mobVideoBox}>
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            style={s.mobRemoteVideo}
+          />
 
-          {/* Overlay */}
           {status !== 'connected' && (
-            <div style={{
-              position: 'absolute', inset: 0,
-              background: 'rgba(0,0,0,0.82)',
-              display: 'flex', flexDirection: 'column',
-              alignItems: 'center', justifyContent: 'center',
-              zIndex: 2,
-            }}>
+            <div style={s.mobOverlay}>
               {status === 'idle' && (
-                <>
-                  <div style={{ fontSize: '48px', marginBottom: '10px' }}>👋</div>
-                  <div style={{ color: 'white', fontSize: '18px', fontWeight: '700' }}>Tap Start!</div>
-                </>
+                <p style={s.mobOverlayText}>👋 Tap Start!</p>
               )}
               {(status === 'searching' || status === 'waiting') && (
-                <>
-                  <div style={{
-                    width: '42px', height: '42px',
-                    border: '3px solid rgba(255,255,255,0.1)',
-                    borderTop: '3px solid #a855f7',
-                    borderRadius: '50%',
-                    animation: 'spin 1s linear infinite',
-                    marginBottom: '12px',
-                  }} />
-                  <div style={{ color: 'white', fontSize: '18px', fontWeight: '700' }}>Finding stranger...</div>
-                  <div style={{ color: '#9ca3af', fontSize: '13px', marginTop: '6px' }}>This takes a few seconds</div>
-                </>
+                <div style={s.mobSpinner} />
               )}
               {status === 'strangerLeft' && (
-                <>
-                  <div style={{ fontSize: '48px', marginBottom: '10px' }}>👋</div>
-                  <div style={{ color: 'white', fontSize: '18px', fontWeight: '700' }}>Stranger left!</div>
-                  <div style={{ color: '#9ca3af', fontSize: '13px', marginTop: '6px' }}>Tap Next for new stranger</div>
-                </>
+                <p style={s.mobOverlayText}>Stranger left!</p>
               )}
             </div>
           )}
 
-          {/* Stranger label */}
-          <div style={{
-            position: 'absolute', bottom: '10px', left: '10px',
-            background: 'rgba(0,0,0,0.6)', color: '#10b981',
-            padding: '4px 12px', borderRadius: '20px',
-            fontSize: '12px', fontWeight: '700', zIndex: 3,
-          }}>● Stranger</div>
+          {/* Your camera - small top right corner */}
+          <div style={s.mobPip}>
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              style={s.mobPipVideo}
+            />
+          </div>
 
-          {/* Report btn */}
-          <button style={{
-            position: 'absolute', top: '10px', right: '10px',
-            background: 'rgba(220,38,38,0.9)',
-            color: 'white', border: 'none',
-            borderRadius: '50%', width: '36px', height: '36px',
-            fontSize: '16px', cursor: 'pointer', zIndex: 3,
-          }} onClick={() => setShowReport(true)}>🚩</button>
-
-          {/* YOUR VIDEO — PiP inside stranger video */}
-          <div style={{
-            position: 'absolute',
-            bottom: '10px', right: '10px',
-            width: '80px', height: '108px',
-            borderRadius: '10px', overflow: 'hidden',
-            border: '2px solid #a855f7',
-            zIndex: 4,
-          }}>
-            <video ref={localVideoRef} autoPlay playsInline muted style={{
-              width: '100%', height: '100%', objectFit: 'cover',
-            }} />
-            <div style={{
-              position: 'absolute', bottom: '3px', left: '5px',
-              fontSize: '10px', color: 'white',
-              background: 'rgba(0,0,0,0.6)',
-              padding: '1px 5px', borderRadius: '6px',
-            }}>You</div>
+          {/* Bottom bar inside video */}
+          <div style={s.mobVideoBottom}>
+            <span style={s.mobBrand}>Ohmingle.com</span>
+            <button
+              style={s.mobFlagBtn}
+              onClick={() => setShowReport(true)}
+            >
+              🚩
+            </button>
           </div>
         </div>
 
-        {/* ── CHAT MESSAGES ── */}
-        <div style={{
-          flex: 1, overflowY: 'auto',
-          padding: '8px 12px',
-          display: 'flex', flexDirection: 'column', gap: '5px',
-          background: '#111827',
-          minHeight: 0,
-        }}>
+        {/* Chat Area - White, big space */}
+        <div style={s.mobChatArea}>
           {messages.length === 0 && (
-            <p style={{ color: '#6b7280', textAlign: 'center', marginTop: '12px', fontSize: '12px' }}>
-              {status === 'connected' ? '👋 Say hello!' : '🔍 Find a stranger first'}
+            <p style={s.mobSearchingText}>
+              {status === 'idle' && 'Tap Start to find someone.'}
+              {(status === 'searching' || status === 'waiting') && 'Searching for someone to chat with.'}
+              {status === 'connected' && 'Say hello! 👋'}
+              {status === 'strangerLeft' && 'Stranger disconnected.'}
             </p>
           )}
           {messages.map((msg, i) =>
             msg.system ? (
-              <p key={i} style={{ color: '#6b7280', textAlign: 'center', fontSize: '11px' }}>{msg.text}</p>
+              <p key={i} style={s.mobSystemMsg}>{msg.text}</p>
             ) : (
               <div key={i} style={{
-                padding: '7px 11px', borderRadius: '14px',
-                maxWidth: '80%', fontSize: '13px', lineHeight: 1.4,
-                wordBreak: 'break-word', color: 'white',
+                ...s.mobBubble,
                 alignSelf: msg.from === 'me' ? 'flex-end' : 'flex-start',
-                background: msg.from === 'me' ? '#7c3aed' : '#374151',
-              }}>{msg.text}</div>
+                background: msg.from === 'me' ? '#7c3aed' : '#f3f4f6',
+                color: msg.from === 'me' ? 'white' : '#111',
+              }}>
+                {msg.text}
+              </div>
             )
           )}
           <div ref={messagesEndRef} />
         </div>
 
-        {/* ── INPUT ROW ── */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '8px',
-          padding: '8px 12px',
-          background: '#1f2937',
-          borderTop: '1px solid rgba(255,255,255,0.06)',
-          flexShrink: 0,
-        }}>
-          <span style={{ fontSize: '20px' }}>😊</span>
+        {/* Bottom Row - Skip, Stop, Input, Send */}
+        <div style={s.mobBottomRow}>
+          {(status === 'idle' || status === 'strangerLeft') && (
+            <button style={s.mobSkipBtn} onClick={findStranger}>
+              Start
+            </button>
+          )}
+          {(status === 'searching' || status === 'waiting' || status === 'connected') && (
+            <button style={s.mobSkipBtn} onClick={skipStranger}>
+              Skip
+            </button>
+          )}
+
+          <button style={s.mobStopBtn} onClick={goHome}>■</button>
+
           <input
-            style={{
-              flex: 1,
-              background: 'rgba(255,255,255,0.08)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: '22px', padding: '9px 14px',
-              color: 'white', fontSize: '14px', outline: 'none',
-            }}
+            style={s.mobBottomInput}
             type="text"
             placeholder="Type message..."
             value={inputMsg}
             onChange={e => setInputMsg(e.target.value)}
             onKeyPress={e => e.key === 'Enter' && sendMessage()}
           />
-          <button style={{
-            background: '#7c3aed', color: 'white',
-            border: 'none', borderRadius: '50%',
-            width: '36px', height: '36px',
-            fontSize: '15px', cursor: 'pointer',
-          }} onClick={sendMessage}>➤</button>
+          <button style={s.mobSendArrow} onClick={sendMessage}>➤</button>
         </div>
 
-        {/* ── CONTROLS ── */}
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          gap: '10px', padding: '10px 14px',
-          background: '#000',
-          borderTop: '1px solid rgba(255,255,255,0.05)',
-          flexShrink: 0,
-        }}>
-          <button style={{
-            background: isMuted ? '#dc2626' : '#4b5563',
-            color: 'white', border: 'none',
-            borderRadius: '50%', width: '44px', height: '44px',
-            fontSize: '18px', cursor: 'pointer',
-          }} onClick={toggleMute}>{isMuted ? '🔇' : '🎤'}</button>
-
-          <button style={{
-            background: isCameraOff ? '#dc2626' : '#4b5563',
-            color: 'white', border: 'none',
-            borderRadius: '50%', width: '44px', height: '44px',
-            fontSize: '18px', cursor: 'pointer',
-          }} onClick={toggleCamera}>{isCameraOff ? '📵' : '📷'}</button>
-
-          {(status === 'idle' || status === 'strangerLeft') && (
-            <button style={{
-              background: '#7c3aed', color: 'white', border: 'none',
-              borderRadius: '24px', padding: '11px 28px',
-              fontSize: '15px', fontWeight: '800', cursor: 'pointer',
-            }} onClick={findStranger}>▶ Start</button>
-          )}
-          {(status === 'searching' || status === 'waiting' || status === 'connected') && (
-            <button style={{
-              background: '#10b981', color: 'white', border: 'none',
-              borderRadius: '24px', padding: '11px 28px',
-              fontSize: '15px', fontWeight: '800', cursor: 'pointer',
-            }} onClick={skipStranger}>▶▶ Next</button>
-          )}
-
-          <button style={{
-            background: '#dc2626', color: 'white', border: 'none',
-            borderRadius: '50%', width: '44px', height: '44px',
-            fontSize: '18px', cursor: 'pointer',
-          }} onClick={goHome}>■</button>
-        </div>
       </div>
     );
   }
 
-  // ════════════════════════════════════════════
-  // DESKTOP LAYOUT
-  // ════════════════════════════════════════════
+  // ── DESKTOP LAYOUT ─────────────────────────────────────────────────────────
   return (
     <div style={s.deskContainer}>
       {showReport && <ReportModal />}
 
+      {/* Left Panel */}
       <div style={s.deskLeft}>
+
+        {/* Stranger video top half */}
         <div style={s.deskVideoBox}>
           <video ref={remoteVideoRef} autoPlay playsInline style={s.deskVideo} />
           {status !== 'connected' && (
             <div style={s.deskOverlay}>
               {status === 'idle' && <p style={s.deskOverlayText}>👋 Click Start!</p>}
               {(status === 'searching' || status === 'waiting') && (
-                <div style={{ textAlign: 'center' }}>
+                <div style={s.deskOverlayCenter}>
                   <div style={s.deskSpinner} />
                   <p style={s.deskOverlayText}>Finding stranger...</p>
                 </div>
@@ -463,13 +341,18 @@ function ChatPage() {
               {status === 'strangerLeft' && <p style={s.deskOverlayText}>Stranger left 👋</p>}
             </div>
           )}
-          <div style={s.deskVideoLabel}>● Stranger</div>
+          <div style={s.deskVideoLabel}>
+            <span style={s.deskGreenDot}></span> Stranger
+          </div>
           <button style={s.deskReportBtn} onClick={() => setShowReport(true)}>⚑ Report</button>
         </div>
 
+        {/* Your video bottom half */}
         <div style={s.deskVideoBox}>
           <video ref={localVideoRef} autoPlay playsInline muted style={s.deskVideo} />
-          <div style={s.deskVideoLabel}>● You ({gender})</div>
+          <div style={s.deskVideoLabel}>
+            <span style={s.deskGreenDot}></span> You
+          </div>
           <div style={s.deskVideoControls}>
             <button style={{ ...s.deskVCtrlBtn, background: isMuted ? '#dc2626' : 'rgba(0,0,0,0.5)' }} onClick={toggleMute}>
               {isMuted ? '🔇' : '🎤'}
@@ -480,43 +363,55 @@ function ChatPage() {
           </div>
         </div>
 
+        {/* Controls bar */}
         <div style={s.deskControlBar}>
-          <span style={s.deskLogo} onClick={goHome}>Ohm<span style={{ color: '#a855f7' }}>ingle</span></span>
+          <span style={s.deskLogo} onClick={goHome}>
+            Ohm<span style={{ color: '#a855f7' }}>ingle</span>
+          </span>
           <span style={s.deskOnline}>● {onlineCount} online</span>
           <div style={s.deskBtnRow}>
             {(status === 'idle' || status === 'strangerLeft') && (
               <button style={s.deskStartBtn} onClick={findStranger}>Start</button>
             )}
             {(status === 'searching' || status === 'waiting' || status === 'connected') && (
-              <button style={s.deskSkipBtn} onClick={skipStranger}>Next</button>
+              <button style={s.deskSkipBtn} onClick={skipStranger}>
+                Skip <span style={{ fontSize: '11px', opacity: 0.7 }}>Esc</span>
+              </button>
             )}
             <button style={s.deskStopBtn} onClick={goHome}>■ Stop</button>
           </div>
         </div>
       </div>
 
+      {/* Right Panel — Chat */}
       <div style={s.deskRight}>
         <div style={s.deskMessages}>
-          {messages.length === 0 && <p style={s.deskNoMsg}>Find a stranger to start chatting</p>}
+          {messages.length === 0 && (
+            <p style={s.deskNoMsg}>Find a stranger to start chatting</p>
+          )}
           {messages.map((msg, i) =>
-            msg.system ? (
-              <p key={i} style={s.deskSystemMsg}>{msg.text}</p>
-            ) : (
-              <div key={i} style={{
-                ...s.deskBubble,
-                alignSelf: msg.from === 'me' ? 'flex-end' : 'flex-start',
-                background: msg.from === 'me' ? '#7c3aed' : '#f3f4f6',
-                color: msg.from === 'me' ? 'white' : '#111',
-              }}>{msg.text}</div>
-            )
+            msg.system
+              ? <p key={i} style={s.deskSystemMsg}>{msg.text}</p>
+              : (
+                <div key={i} style={{
+                  ...s.deskBubble,
+                  alignSelf: msg.from === 'me' ? 'flex-end' : 'flex-start',
+                  background: msg.from === 'me' ? '#7c3aed' : '#f3f4f6',
+                  color: msg.from === 'me' ? 'white' : '#111',
+                }}>
+                  {msg.text}
+                </div>
+              )
           )}
           <div ref={messagesEndRef} />
         </div>
+
         {interests.length > 0 && status === 'connected' && (
           <div style={s.deskInterestBar}>
             {interests.map(i => <span key={i} style={s.deskInterestTag}>{i}</span>)}
           </div>
         )}
+
         <div style={s.deskInputRow}>
           <input
             style={s.deskInput}
@@ -533,21 +428,218 @@ function ChatPage() {
   );
 }
 
+// ── ALL STYLES ──────────────────────────────────────────────────────────────
 const s = {
-  modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 },
-  modal: { background: 'white', borderRadius: '16px', padding: '22px', width: '290px', display: 'flex', flexDirection: 'column', gap: '9px' },
-  modalTitle: { fontSize: '17px', fontWeight: '800', color: '#111', textAlign: 'center', margin: 0 },
-  modalSub: { color: '#6b7280', fontSize: '13px', textAlign: 'center', margin: 0 },
-  modalOption: { background: '#f3f4f6', border: 'none', borderRadius: '9px', padding: '11px 14px', fontSize: '13px', cursor: 'pointer', textAlign: 'left', color: '#111', fontWeight: '500' },
-  modalCancel: { background: 'transparent', border: '1px solid #e5e7eb', borderRadius: '9px', padding: '10px', fontSize: '13px', cursor: 'pointer', color: '#6b7280' },
+
+  // Modal (shared)
+  modalOverlay: { position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999 },
+  modal: { background:'white', borderRadius:'16px', padding:'22px', width:'290px', display:'flex', flexDirection:'column', gap:'9px', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' },
+  modalTitle: { fontSize:'17px', fontWeight:'800', color:'#111', textAlign:'center', margin:0 },
+  modalSub: { color:'#6b7280', fontSize:'13px', textAlign:'center', margin:0 },
+  modalOption: { background:'#f3f4f6', border:'none', borderRadius:'9px', padding:'11px 14px', fontSize:'13px', cursor:'pointer', textAlign:'left', color:'#111', fontWeight:'500' },
+  modalCancel: { background:'transparent', border:'1px solid #e5e7eb', borderRadius:'9px', padding:'10px', fontSize:'13px', cursor:'pointer', color:'#6b7280', marginTop:'2px' },
+
+  // ── MOBILE STYLES (Omegle-style) ──
+  mobContainer: {
+    position: 'fixed',
+    top: 0, left: 0,
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    background: '#fff',
+    fontFamily: 'Segoe UI, sans-serif',
+    overflow: 'hidden',
+  },
+  mobHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '12px 16px',
+    background: '#fff',
+    flexShrink: 0,
+  },
+  mobLogo: {
+    fontSize: '24px',
+    fontWeight: '900',
+    color: '#111',
+    cursor: 'pointer',
+  },
+  mobOnline: {
+    color: '#7c3aed',
+    fontSize: '18px',
+    fontWeight: '800',
+  },
+
+  mobVideoBox: {
+    height: '38vh',
+    minHeight: '260px',
+    maxHeight: '340px',
+    position: 'relative',
+    background: '#3a3a3a',
+    margin: '0 12px',
+    borderRadius: '14px',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  mobRemoteVideo: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+  },
+  mobOverlay: {
+    position: 'absolute',
+    inset: 0,
+    background: 'rgba(0,0,0,0.6)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mobOverlayText: {
+    color: 'white',
+    fontSize: '17px',
+    fontWeight: '600',
+  },
+  mobSpinner: {
+    width: '44px',
+    height: '44px',
+    border: '3px solid rgba(255,255,255,0.2)',
+    borderTop: '3px solid white',
+    borderRadius: '50%',
+    animation: 'spin 1s linear infinite',
+  },
+  mobPip: {
+    position: 'absolute',
+    top: '10px',
+    right: '10px',
+    width: '70px',
+    height: '70px',
+    borderRadius: '10px',
+    overflow: 'hidden',
+    border: '2px solid white',
+  },
+  mobPipVideo: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+  },
+  mobVideoBottom: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '10px 12px',
+    background: 'rgba(0,0,0,0.3)',
+  },
+  mobBrand: {
+    color: '#c4b5fd',
+    fontWeight: '800',
+    fontSize: '14px',
+  },
+  mobFlagBtn: {
+    background: 'transparent',
+    border: 'none',
+    fontSize: '18px',
+    cursor: 'pointer',
+  },
+
+  mobChatArea: {
+    flex: 1,
+    margin: '12px',
+    background: '#fff',
+    border: '1px solid #e5e7eb',
+    borderRadius: '14px',
+    padding: '16px',
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    minHeight: 0,
+  },
+  mobSearchingText: {
+    color: '#111',
+    fontSize: '16px',
+    fontWeight: '700',
+  },
+  mobSystemMsg: {
+    color: '#9ca3af',
+    fontSize: '13px',
+    textAlign: 'center',
+  },
+  mobBubble: {
+    padding: '10px 14px',
+    borderRadius: '16px',
+    maxWidth: '80%',
+    fontSize: '14px',
+    lineHeight: 1.4,
+    wordBreak: 'break-word',
+  },
+
+  mobBottomRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '0 12px 12px 12px',
+    flexShrink: 0,
+  },
+  mobSkipBtn: {
+    background: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '12px',
+    padding: '14px 18px',
+    fontSize: '15px',
+    fontWeight: '700',
+    color: '#111',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  mobStopBtn: {
+    background: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '12px',
+    width: '50px',
+    height: '50px',
+    fontSize: '16px',
+    color: '#374151',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  mobBottomInput: {
+    flex: 1,
+    border: '1px solid #d1d5db',
+    borderRadius: '12px',
+    padding: '14px',
+    fontSize: '14px',
+    outline: 'none',
+    color: '#111',
+    minWidth: 0,
+  },
+  mobSendArrow: {
+    background: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '12px',
+    width: '50px',
+    height: '50px',
+    fontSize: '16px',
+    color: '#9ca3af',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+
+  // ── DESKTOP STYLES ──
   deskContainer: { height: '100vh', display: 'flex', background: '#fff', fontFamily: 'Segoe UI, sans-serif', overflow: 'hidden' },
   deskLeft: { width: '45%', display: 'flex', flexDirection: 'column', background: '#000', flexShrink: 0 },
   deskVideoBox: { flex: 1, position: 'relative', overflow: 'hidden', borderBottom: '1px solid #1a1a1a' },
   deskVideo: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
   deskOverlay: { position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.82)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
+  deskOverlayCenter: { textAlign: 'center' },
   deskOverlayText: { color: 'white', fontSize: '20px', fontWeight: '700', textAlign: 'center' },
-  deskSpinner: { width: '44px', height: '44px', border: '3px solid rgba(255,255,255,0.1)', borderTop: '3px solid #a855f7', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' },
-  deskVideoLabel: { position: 'absolute', bottom: '10px', left: '12px', background: 'rgba(0,0,0,0.55)', color: '#10b981', padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: '700' },
+  deskSpinner: { width: '44px', height: '44px', border: '3px solid rgba(255,255,255,0.12)', borderTop: '3px solid #a855f7', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' },
+  deskVideoLabel: { position: 'absolute', bottom: '10px', left: '12px', background: 'rgba(0,0,0,0.55)', color: 'white', padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '5px' },
+  deskGreenDot: { width: '7px', height: '7px', background: '#10b981', borderRadius: '50%', display: 'inline-block' },
   deskReportBtn: { position: 'absolute', bottom: '10px', right: '12px', background: 'rgba(0,0,0,0.5)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '20px', padding: '4px 12px', fontSize: '12px', cursor: 'pointer' },
   deskVideoControls: { position: 'absolute', top: '10px', right: '10px', display: 'flex', gap: '6px' },
   deskVCtrlBtn: { color: 'white', border: 'none', borderRadius: '50%', width: '32px', height: '32px', fontSize: '14px', cursor: 'pointer' },
@@ -557,7 +649,7 @@ const s = {
   deskBtnRow: { display: 'flex', gap: '8px', alignItems: 'center' },
   deskStartBtn: { background: '#7c3aed', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 22px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' },
   deskSkipBtn: { background: '#374151', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 22px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' },
-  deskStopBtn: { background: '#dc2626', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' },
+  deskStopBtn: { background: '#374151', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' },
   deskRight: { flex: 1, display: 'flex', flexDirection: 'column', background: 'white', overflow: 'hidden' },
   deskMessages: { flex: 1, padding: '16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' },
   deskNoMsg: { color: '#9ca3af', textAlign: 'center', marginTop: '40px', fontSize: '14px' },
