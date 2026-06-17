@@ -261,7 +261,7 @@ function ChatPage() {
           </div>
         </div>
 
-        {/* Chat Area - White, big space */}
+        {/* Chat Area */}
         <div style={s.mobChatArea}>
           {messages.length === 0 && (
             <p style={s.mobSearchingText}>
@@ -278,8 +278,8 @@ function ChatPage() {
               <div key={i} style={{
                 ...s.mobBubble,
                 alignSelf: msg.from === 'me' ? 'flex-end' : 'flex-start',
-                background: msg.from === 'me' ? '#7c3aed' : '#f3f4f6',
-                color: msg.from === 'me' ? 'white' : '#111',
+                background: msg.from === 'me' ? '#7c3aed' : '#1f2937',
+                color: 'white',
               }}>
                 {msg.text}
               </div>
@@ -288,7 +288,7 @@ function ChatPage() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Bottom Row - Skip, Stop, Input, Send */}
+        {/* Bottom Row */}
         <div style={s.mobBottomRow}>
           {(status === 'idle' || status === 'strangerLeft') && (
             <button style={s.mobSkipBtn} onClick={findStranger}>
@@ -318,17 +318,24 @@ function ChatPage() {
     );
   }
 
-  // ── DESKTOP LAYOUT ─────────────────────────────────────────────────────────
+  // ── DESKTOP LAYOUT (Same Omegle-style, bigger) ──────────────────────────────
   return (
     <div style={s.deskContainer}>
       {showReport && <ReportModal />}
 
-      {/* Left Panel */}
-      <div style={s.deskLeft}>
+      {/* Header */}
+      <div style={s.deskHeader}>
+        <span style={s.deskLogo} onClick={goHome}>
+          Ohm<span style={{ color: '#7c3aed' }}>ingle</span>
+        </span>
+        <span style={s.deskOnline}>{onlineCount}+</span>
+      </div>
 
-        {/* Stranger video top half */}
+      <div style={s.deskMain}>
+        {/* Video Box */}
         <div style={s.deskVideoBox}>
-          <video ref={remoteVideoRef} autoPlay playsInline style={s.deskVideo} />
+          <video ref={remoteVideoRef} autoPlay playsInline style={s.deskRemoteVideo} />
+
           {status !== 'connected' && (
             <div style={s.deskOverlay}>
               {status === 'idle' && <p style={s.deskOverlayText}>👋 Click Start!</p>}
@@ -341,88 +348,71 @@ function ChatPage() {
               {status === 'strangerLeft' && <p style={s.deskOverlayText}>Stranger left 👋</p>}
             </div>
           )}
-          <div style={s.deskVideoLabel}>
-            <span style={s.deskGreenDot}></span> Stranger
-          </div>
-          <button style={s.deskReportBtn} onClick={() => setShowReport(true)}>⚑ Report</button>
-        </div>
 
-        {/* Your video bottom half */}
-        <div style={s.deskVideoBox}>
-          <video ref={localVideoRef} autoPlay playsInline muted style={s.deskVideo} />
-          <div style={s.deskVideoLabel}>
-            <span style={s.deskGreenDot}></span> You
+          <div style={s.deskPip}>
+            <video ref={localVideoRef} autoPlay playsInline muted style={s.deskPipVideo} />
           </div>
-          <div style={s.deskVideoControls}>
-            <button style={{ ...s.deskVCtrlBtn, background: isMuted ? '#dc2626' : 'rgba(0,0,0,0.5)' }} onClick={toggleMute}>
-              {isMuted ? '🔇' : '🎤'}
-            </button>
-            <button style={{ ...s.deskVCtrlBtn, background: isCameraOff ? '#dc2626' : 'rgba(0,0,0,0.5)' }} onClick={toggleCamera}>
-              {isCameraOff ? '📵' : '📷'}
-            </button>
+
+          <div style={s.deskVideoBottom}>
+            <span style={s.deskBrand}>Ohmingle.com</span>
+            <button style={s.deskFlagBtn} onClick={() => setShowReport(true)}>🚩</button>
           </div>
         </div>
 
-        {/* Controls bar */}
-        <div style={s.deskControlBar}>
-          <span style={s.deskLogo} onClick={goHome}>
-            Ohm<span style={{ color: '#a855f7' }}>ingle</span>
-          </span>
-          <span style={s.deskOnline}>● {onlineCount} online</span>
-          <div style={s.deskBtnRow}>
-            {(status === 'idle' || status === 'strangerLeft') && (
-              <button style={s.deskStartBtn} onClick={findStranger}>Start</button>
+        {/* Chat Area */}
+        <div style={s.deskChatArea}>
+          <div style={s.deskMessages}>
+            {messages.length === 0 && (
+              <p style={s.deskSearchingText}>
+                {status === 'idle' && 'Click Start to find someone.'}
+                {(status === 'searching' || status === 'waiting') && 'Searching for someone to chat with.'}
+                {status === 'connected' && 'Say hello! 👋'}
+                {status === 'strangerLeft' && 'Stranger disconnected.'}
+              </p>
             )}
-            {(status === 'searching' || status === 'waiting' || status === 'connected') && (
-              <button style={s.deskSkipBtn} onClick={skipStranger}>
-                Skip <span style={{ fontSize: '11px', opacity: 0.7 }}>Esc</span>
-              </button>
-            )}
-            <button style={s.deskStopBtn} onClick={goHome}>■ Stop</button>
-          </div>
-        </div>
-      </div>
-
-      {/* Right Panel — Chat */}
-      <div style={s.deskRight}>
-        <div style={s.deskMessages}>
-          {messages.length === 0 && (
-            <p style={s.deskNoMsg}>Find a stranger to start chatting</p>
-          )}
-          {messages.map((msg, i) =>
-            msg.system
-              ? <p key={i} style={s.deskSystemMsg}>{msg.text}</p>
-              : (
+            {messages.map((msg, i) =>
+              msg.system ? (
+                <p key={i} style={s.deskSystemMsg}>{msg.text}</p>
+              ) : (
                 <div key={i} style={{
                   ...s.deskBubble,
                   alignSelf: msg.from === 'me' ? 'flex-end' : 'flex-start',
-                  background: msg.from === 'me' ? '#7c3aed' : '#f3f4f6',
-                  color: msg.from === 'me' ? 'white' : '#111',
+                  background: msg.from === 'me' ? '#7c3aed' : '#1f2937',
+                  color: 'white',
                 }}>
                   {msg.text}
                 </div>
               )
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {interests.length > 0 && status === 'connected' && (
-          <div style={s.deskInterestBar}>
-            {interests.map(i => <span key={i} style={s.deskInterestTag}>{i}</span>)}
+            )}
+            <div ref={messagesEndRef} />
           </div>
-        )}
 
-        <div style={s.deskInputRow}>
-          <input
-            style={s.deskInput}
-            type="text"
-            placeholder="Type a message..."
-            value={inputMsg}
-            onChange={e => setInputMsg(e.target.value)}
-            onKeyPress={e => e.key === 'Enter' && sendMessage()}
-          />
-          <button style={s.deskSendBtn} onClick={sendMessage}>➤</button>
+          {interests.length > 0 && status === 'connected' && (
+            <div style={s.deskInterestBar}>
+              {interests.map(i => <span key={i} style={s.deskInterestTag}>{i}</span>)}
+            </div>
+          )}
         </div>
+      </div>
+
+      {/* Bottom Row */}
+      <div style={s.deskBottomRow}>
+        {(status === 'idle' || status === 'strangerLeft') && (
+          <button style={s.deskSkipBtn} onClick={findStranger}>Start</button>
+        )}
+        {(status === 'searching' || status === 'waiting' || status === 'connected') && (
+          <button style={s.deskSkipBtn} onClick={skipStranger}>Skip</button>
+        )}
+        <button style={s.deskStopBtn} onClick={goHome}>■</button>
+        <input
+          style={s.deskBottomInput}
+          type="text"
+          placeholder="Type message..."
+          value={inputMsg}
+          onChange={e => setInputMsg(e.target.value)}
+          onKeyPress={e => e.key === 'Enter' && sendMessage()}
+        />
+        <button style={s.deskSendArrow} onClick={sendMessage}>➤</button>
       </div>
     </div>
   );
@@ -447,7 +437,7 @@ const s = {
     height: '100%',
     display: 'flex',
     flexDirection: 'column',
-    background: '#fff',
+    background: '#0a0a0f',
     fontFamily: 'Segoe UI, sans-serif',
     overflow: 'hidden',
   },
@@ -456,13 +446,13 @@ const s = {
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: '12px 16px',
-    background: '#fff',
+    background: '#0a0a0f',
     flexShrink: 0,
   },
   mobLogo: {
     fontSize: '24px',
     fontWeight: '900',
-    color: '#111',
+    color: 'white',
     cursor: 'pointer',
   },
   mobOnline: {
@@ -476,7 +466,7 @@ const s = {
     minHeight: '260px',
     maxHeight: '340px',
     position: 'relative',
-    background: '#3a3a3a',
+    background: '#1a1a1a',
     margin: '0 12px',
     borderRadius: '14px',
     overflow: 'hidden',
@@ -490,7 +480,7 @@ const s = {
   mobOverlay: {
     position: 'absolute',
     inset: 0,
-    background: 'rgba(0,0,0,0.6)',
+    background: 'rgba(0,0,0,0.7)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -503,8 +493,8 @@ const s = {
   mobSpinner: {
     width: '44px',
     height: '44px',
-    border: '3px solid rgba(255,255,255,0.2)',
-    borderTop: '3px solid white',
+    border: '3px solid rgba(255,255,255,0.15)',
+    borderTop: '3px solid #7c3aed',
     borderRadius: '50%',
     animation: 'spin 1s linear infinite',
   },
@@ -549,8 +539,7 @@ const s = {
   mobChatArea: {
     flex: 1,
     margin: '12px',
-    background: '#fff',
-    border: '1px solid #e5e7eb',
+    background: '#111827',
     borderRadius: '14px',
     padding: '16px',
     overflowY: 'auto',
@@ -560,12 +549,12 @@ const s = {
     minHeight: 0,
   },
   mobSearchingText: {
-    color: '#111',
+    color: '#9ca3af',
     fontSize: '16px',
-    fontWeight: '700',
+    fontWeight: '600',
   },
   mobSystemMsg: {
-    color: '#9ca3af',
+    color: '#6b7280',
     fontSize: '13px',
     textAlign: 'center',
   },
@@ -586,80 +575,201 @@ const s = {
     flexShrink: 0,
   },
   mobSkipBtn: {
-    background: '#fff',
-    border: '1px solid #d1d5db',
+    background: '#1f2937',
+    border: '1px solid #374151',
     borderRadius: '12px',
     padding: '14px 18px',
     fontSize: '15px',
     fontWeight: '700',
-    color: '#111',
+    color: 'white',
     cursor: 'pointer',
     flexShrink: 0,
   },
   mobStopBtn: {
-    background: '#fff',
-    border: '1px solid #d1d5db',
+    background: '#1f2937',
+    border: '1px solid #374151',
     borderRadius: '12px',
     width: '50px',
     height: '50px',
     fontSize: '16px',
-    color: '#374151',
+    color: 'white',
     cursor: 'pointer',
     flexShrink: 0,
   },
   mobBottomInput: {
     flex: 1,
-    border: '1px solid #d1d5db',
+    background: '#1f2937',
+    border: '1px solid #374151',
     borderRadius: '12px',
     padding: '14px',
     fontSize: '14px',
     outline: 'none',
-    color: '#111',
+    color: 'white',
     minWidth: 0,
   },
   mobSendArrow: {
-    background: '#fff',
-    border: '1px solid #d1d5db',
+    background: '#7c3aed',
+    border: 'none',
     borderRadius: '12px',
     width: '50px',
     height: '50px',
     fontSize: '16px',
-    color: '#9ca3af',
+    color: 'white',
     cursor: 'pointer',
     flexShrink: 0,
   },
 
-  // ── DESKTOP STYLES ──
-  deskContainer: { height: '100vh', display: 'flex', background: '#fff', fontFamily: 'Segoe UI, sans-serif', overflow: 'hidden' },
-  deskLeft: { width: '45%', display: 'flex', flexDirection: 'column', background: '#000', flexShrink: 0 },
-  deskVideoBox: { flex: 1, position: 'relative', overflow: 'hidden', borderBottom: '1px solid #1a1a1a' },
-  deskVideo: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
-  deskOverlay: { position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.82)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
+  // ── DESKTOP STYLES (Same Omegle-style, bigger) ──
+  deskContainer: {
+    height: '100vh',
+    display: 'flex',
+    flexDirection: 'column',
+    background: '#0a0a0f',
+    fontFamily: 'Segoe UI, sans-serif',
+    overflow: 'hidden',
+  },
+  deskHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '14px 30px',
+    background: '#0a0a0f',
+    flexShrink: 0,
+  },
+  deskLogo: { fontSize: '26px', fontWeight: '900', color: 'white', cursor: 'pointer' },
+  deskOnline: { color: '#7c3aed', fontSize: '20px', fontWeight: '800' },
+  deskMain: {
+    flex: 1,
+    display: 'flex',
+    gap: '16px',
+    padding: '0 24px',
+    overflow: 'hidden',
+    minHeight: 0,
+  },
+  deskVideoBox: {
+    flex: 1,
+    position: 'relative',
+    background: '#1a1a1a',
+    borderRadius: '16px',
+    overflow: 'hidden',
+  },
+  deskRemoteVideo: { width: '100%', height: '100%', objectFit: 'cover' },
+  deskOverlay: {
+    position: 'absolute', inset: 0,
+    background: 'rgba(0,0,0,0.7)',
+    display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center',
+  },
   deskOverlayCenter: { textAlign: 'center' },
-  deskOverlayText: { color: 'white', fontSize: '20px', fontWeight: '700', textAlign: 'center' },
-  deskSpinner: { width: '44px', height: '44px', border: '3px solid rgba(255,255,255,0.12)', borderTop: '3px solid #a855f7', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' },
-  deskVideoLabel: { position: 'absolute', bottom: '10px', left: '12px', background: 'rgba(0,0,0,0.55)', color: 'white', padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '5px' },
-  deskGreenDot: { width: '7px', height: '7px', background: '#10b981', borderRadius: '50%', display: 'inline-block' },
-  deskReportBtn: { position: 'absolute', bottom: '10px', right: '12px', background: 'rgba(0,0,0,0.5)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '20px', padding: '4px 12px', fontSize: '12px', cursor: 'pointer' },
-  deskVideoControls: { position: 'absolute', top: '10px', right: '10px', display: 'flex', gap: '6px' },
-  deskVCtrlBtn: { color: 'white', border: 'none', borderRadius: '50%', width: '32px', height: '32px', fontSize: '14px', cursor: 'pointer' },
-  deskControlBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', background: '#111', flexShrink: 0 },
-  deskLogo: { fontSize: '20px', fontWeight: '900', color: 'white', cursor: 'pointer' },
-  deskOnline: { color: '#10b981', fontSize: '13px', fontWeight: '700' },
-  deskBtnRow: { display: 'flex', gap: '8px', alignItems: 'center' },
-  deskStartBtn: { background: '#7c3aed', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 22px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' },
-  deskSkipBtn: { background: '#374151', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 22px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' },
-  deskStopBtn: { background: '#374151', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' },
-  deskRight: { flex: 1, display: 'flex', flexDirection: 'column', background: 'white', overflow: 'hidden' },
-  deskMessages: { flex: 1, padding: '16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' },
-  deskNoMsg: { color: '#9ca3af', textAlign: 'center', marginTop: '40px', fontSize: '14px' },
-  deskSystemMsg: { color: '#6b7280', textAlign: 'center', fontSize: '13px', padding: '6px 0' },
-  deskBubble: { padding: '10px 14px', borderRadius: '18px', maxWidth: '75%', fontSize: '14px', lineHeight: 1.5, wordBreak: 'break-word' },
-  deskInterestBar: { display: 'flex', gap: '6px', padding: '8px 16px', borderTop: '1px solid #f3f4f6', flexWrap: 'wrap' },
-  deskInterestTag: { background: '#f3e8ff', color: '#7c3aed', borderRadius: '12px', padding: '3px 10px', fontSize: '12px', fontWeight: '600' },
-  deskInputRow: { display: 'flex', gap: '8px', padding: '12px 16px', borderTop: '1px solid #e5e7eb', background: 'white', flexShrink: 0 },
-  deskInput: { flex: 1, border: '1px solid #e5e7eb', borderRadius: '24px', padding: '10px 18px', fontSize: '14px', outline: 'none', background: '#f9fafb' },
-  deskSendBtn: { background: '#7c3aed', color: 'white', border: 'none', borderRadius: '50%', width: '42px', height: '42px', fontSize: '18px', cursor: 'pointer', flexShrink: 0 },
+  deskOverlayText: { color: 'white', fontSize: '22px', fontWeight: '700' },
+  deskSpinner: {
+    width: '50px', height: '50px',
+    border: '3px solid rgba(255,255,255,0.15)',
+    borderTop: '3px solid #7c3aed',
+    borderRadius: '50%',
+    animation: 'spin 1s linear infinite',
+    margin: '0 auto 14px',
+  },
+  deskPip: {
+    position: 'absolute', top: '16px', right: '16px',
+    width: '140px', height: '105px',
+    borderRadius: '12px', overflow: 'hidden',
+    border: '2px solid white',
+  },
+  deskPipVideo: { width: '100%', height: '100%', objectFit: 'cover' },
+  deskVideoBottom: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '12px 18px',
+    background: 'rgba(0,0,0,0.3)',
+  },
+  deskBrand: { color: '#c4b5fd', fontWeight: '800', fontSize: '16px' },
+  deskFlagBtn: { background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer' },
+  deskChatArea: {
+    width: '380px',
+    background: '#111827',
+    borderRadius: '16px',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  },
+  deskMessages: {
+    flex: 1,
+    padding: '20px',
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  deskSearchingText: { color: '#9ca3af', fontSize: '16px', fontWeight: '600' },
+  deskSystemMsg: { color: '#6b7280', fontSize: '13px', textAlign: 'center' },
+  deskBubble: {
+    padding: '10px 16px',
+    borderRadius: '16px',
+    maxWidth: '85%',
+    fontSize: '14px',
+    lineHeight: 1.5,
+    wordBreak: 'break-word',
+  },
+  deskInterestBar: {
+    display: 'flex', gap: '6px',
+    padding: '12px 20px',
+    borderTop: '1px solid rgba(255,255,255,0.06)',
+    flexWrap: 'wrap',
+  },
+  deskInterestTag: {
+    background: 'rgba(124,58,237,0.15)',
+    color: '#a78bfa',
+    borderRadius: '12px',
+    padding: '3px 10px',
+    fontSize: '12px',
+    fontWeight: '600',
+  },
+  deskBottomRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '16px 24px',
+    flexShrink: 0,
+  },
+  deskSkipBtn: {
+    background: '#1f2937',
+    border: '1px solid #374151',
+    borderRadius: '12px',
+    padding: '14px 26px',
+    fontSize: '16px',
+    fontWeight: '700',
+    color: 'white',
+    cursor: 'pointer',
+  },
+  deskStopBtn: {
+    background: '#1f2937',
+    border: '1px solid #374151',
+    borderRadius: '12px',
+    width: '52px', height: '52px',
+    fontSize: '18px',
+    color: 'white',
+    cursor: 'pointer',
+  },
+  deskBottomInput: {
+    flex: 1,
+    background: '#1f2937',
+    border: '1px solid #374151',
+    borderRadius: '12px',
+    padding: '15px',
+    fontSize: '15px',
+    color: 'white',
+    outline: 'none',
+  },
+  deskSendArrow: {
+    background: '#7c3aed',
+    border: 'none',
+    borderRadius: '12px',
+    width: '52px', height: '52px',
+    fontSize: '18px',
+    color: 'white',
+    cursor: 'pointer',
+  },
 };
 
 export default ChatPage;
