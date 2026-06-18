@@ -93,7 +93,7 @@ function ChatPage() {
     };
     startCamera();
 
-    const socket = io('http://localhost:3001', { transports: ['websocket', 'polling'], forceNew: true });
+    const socket = io('https://ohmingle-backend-production.up.railway.app', { transports: ['websocket', 'polling'], forceNew: true });
     socketRef.current = socket;
 
     socket.on('connect', () => console.log('✅ Connected:', socket.id));
