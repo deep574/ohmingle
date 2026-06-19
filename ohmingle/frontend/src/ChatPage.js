@@ -313,7 +313,13 @@ function ChatPage() {
       {/* ✅ SMALL: Local/your video in corner */}
       <div style={pipStyle}>
         <video
-          ref={localVideoRef}
+          ref={el => {
+            localVideoRef.current = el;
+            // Attach stream immediately when element mounts
+            if (el && streamRef.current && !el.srcObject) {
+              el.srcObject = streamRef.current;
+            }
+          }}
           autoPlay
           playsInline
           muted
