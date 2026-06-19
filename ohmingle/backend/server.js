@@ -9,48 +9,45 @@ app.use(cors());
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] },
+  // ✅ FIX: Allow both websocket and polling
+  transports: ['websocket', 'polling'],
 });
 
 app.get('/', (req, res) => {
-  res.json({ message: 'Ohmingle Server Running!' });
+  res.json({ message: 'Ohmingle Server Running!', online: onlineUsers.size });
 });
 
 let waitingUsers = [];
 const activePairs = new Map();
-let onlineUsers = new Set();
+const onlineUsers = new Set();   // ✅ Use const so it's never accidentally replaced
 
 function broadcastOnlineCount() {
-  io.emit('onlineCount', onlineUsers.size);
+  const count = onlineUsers.size;
+  console.log(`📡 Broadcasting online count: ${count}`);
+  io.emit('onlineCount', count);  // ✅ io.emit = send to ALL connected clients
 }
 
 io.on('connection', (socket) => {
-  console.log('✅ New connection:', socket.id);
+  console.log('✅ Connected:', socket.id, '| Total:', onlineUsers.size + 1);
   onlineUsers.add(socket.id);
-  broadcastOnlineCount();
+  broadcastOnlineCount();  // ✅ Broadcast immediately when someone joins
 
   socket.on('findStranger', () => {
-    // Remove this socket from waiting list if already there
     waitingUsers = waitingUsers.filter(id => id !== socket.id);
 
     if (waitingUsers.length > 0) {
-      // Match with the first waiting user
       const partnerId = waitingUsers.shift();
       const partnerSocket = io.sockets.sockets.get(partnerId);
 
       if (partnerSocket) {
         activePairs.set(socket.id, partnerId);
         activePairs.set(partnerId, socket.id);
-
-        // Tell this socket it's the "caller" (creates offer)
         socket.emit('strangerFound', { role: 'caller' });
-        // Tell the partner it's the "callee" (waits for offer)
         partnerSocket.emit('strangerFound', { role: 'callee' });
+        console.log(`💚 Matched: ${socket.id} <-> ${partnerId}`);
       } else {
-        // Partner disconnected, add this socket to waiting
+        // Partner already gone — try again
         waitingUsers.push(socket.id);
         socket.emit('waiting');
       }
@@ -62,60 +59,52 @@ io.on('connection', (socket) => {
 
   socket.on('offer', (offer) => {
     const partnerId = activePairs.get(socket.id);
-    if (partnerId) {
-      const partnerSocket = io.sockets.sockets.get(partnerId);
-      if (partnerSocket) partnerSocket.emit('offer', offer);
-    }
+    if (partnerId) io.sockets.sockets.get(partnerId)?.emit('offer', offer);
   });
 
   socket.on('answer', (answer) => {
     const partnerId = activePairs.get(socket.id);
-    if (partnerId) {
-      const partnerSocket = io.sockets.sockets.get(partnerId);
-      if (partnerSocket) partnerSocket.emit('answer', answer);
-    }
+    if (partnerId) io.sockets.sockets.get(partnerId)?.emit('answer', answer);
   });
 
   socket.on('iceCandidate', (candidate) => {
     const partnerId = activePairs.get(socket.id);
-    if (partnerId) {
-      const partnerSocket = io.sockets.sockets.get(partnerId);
-      if (partnerSocket) partnerSocket.emit('iceCandidate', candidate);
-    }
+    if (partnerId) io.sockets.sockets.get(partnerId)?.emit('iceCandidate', candidate);
   });
 
   socket.on('message', (data) => {
     const partnerId = activePairs.get(socket.id);
-    if (partnerId) {
-      const partnerSocket = io.sockets.sockets.get(partnerId);
-      if (partnerSocket) partnerSocket.emit('message', data);
-    }
+    if (partnerId) io.sockets.sockets.get(partnerId)?.emit('message', data);
   });
 
-  function disconnectFromPartner() {
+  function cleanupSocket() {
     const partnerId = activePairs.get(socket.id);
     if (partnerId) {
-      const partnerSocket = io.sockets.sockets.get(partnerId);
-      if (partnerSocket) partnerSocket.emit('strangerLeft');
-      activePairs.delete(socket.id);
+      io.sockets.sockets.get(partnerId)?.emit('strangerLeft');
       activePairs.delete(partnerId);
+      activePairs.delete(socket.id);
     }
     waitingUsers = waitingUsers.filter(id => id !== socket.id);
   }
 
   socket.on('skip', () => {
-    disconnectFromPartner();
+    cleanupSocket();
   });
 
   socket.on('disconnect', () => {
-    console.log('❌ Disconnected:', socket.id);
+    console.log('❌ Disconnected:', socket.id, '| Total:', onlineUsers.size - 1);
     onlineUsers.delete(socket.id);
-    disconnectFromPartner();
-    broadcastOnlineCount();
+    cleanupSocket();
+    broadcastOnlineCount();  // ✅ Broadcast immediately when someone leaves
   });
 });
 
+// ✅ FIX: Sync count every 10 seconds to fix any missed updates
+setInterval(() => {
+  broadcastOnlineCount();
+}, 10000);
+
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Ohmingle backend running on port ${PORT}`);
 });
