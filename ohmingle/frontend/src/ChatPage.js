@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import io from 'socket.io-client';
 
-const BACKEND_URL = 'https://ohmingle-backend-production.up.railway.app';
-
+const BACKEND_URL = ohmingle-backend-production-ff22.up.railway.app
 function ChatPage() {
   const navigate = useNavigate();
   const location = useLocation();
