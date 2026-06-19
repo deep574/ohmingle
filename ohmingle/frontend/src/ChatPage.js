@@ -91,7 +91,7 @@ function ChatPage() {
     };
     startCamera();
 
-    const socket = io(BACKEND_URL, { transports: ['websocket', 'polling'], forceNew: true });
+    const socket = io(BACKEND_URL, { transports: ['polling','websocket'], forceNew: true });
     socketRef.current = socket;
 
     socket.on('connect', () => console.log('✅ Connected to Railway:', socket.id));
