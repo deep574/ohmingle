@@ -162,7 +162,7 @@ function HomePage() {
 
       {/* Footer */}
       <footer style={s.footer}>
-        <p>© 2025 Ohmingle</p>
+        <p>© 2026 Ohmingle</p>
         <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', marginTop: '6px' }}>
           {['Terms', 'Privacy', 'Contact'].map(link => (
             <span key={link} style={{ color: '#7c3aed', cursor: 'pointer', fontSize: '13px' }}>{link}</span>
