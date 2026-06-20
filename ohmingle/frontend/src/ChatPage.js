@@ -278,13 +278,32 @@ export default function ChatPage() {
     if (streamRef.current)
       streamRef.current.getTracks().forEach(t => pc.addTrack(t, streamRef.current));
 
-    // ✅ FIX: Attach remote stream immediately when track arrives
+    // ✅ FIX: Robust remote stream attachment
     pc.ontrack = e => {
       console.log('📹 Remote track received:', e.track.kind);
-      if (remoteVideoRef.current && e.streams[0]) {
-        remoteVideoRef.current.srcObject = e.streams[0];
+      const stream = e.streams[0];
+      if (!stream) return;
+      // Store stream on ref object for callback ref to use
+      remoteVideoRef._stream = stream;
+      // Attach immediately if element exists
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = stream;
         remoteVideoRef.current.play().catch(() => {});
       }
+      // Retry after 500ms (handles timing race between ontrack and render)
+      setTimeout(() => {
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = stream;
+          remoteVideoRef.current.play().catch(() => {});
+        }
+      }, 500);
+      // Retry after 2s (handles slow TURN relay connections)
+      setTimeout(() => {
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = stream;
+          remoteVideoRef.current.play().catch(() => {});
+        }
+      }, 2000);
     };
 
     // ✅ FIX: Send ALL ICE candidates including TURN relay candidates
@@ -518,10 +537,21 @@ export default function ChatPage() {
     </>
   );
 
+  // ── Remote video callback ref — ensures stream attaches whenever element mounts ──
+  const setRemoteVideoRef = useCallback(el => {
+    remoteVideoRef.current = el;
+    // If stream already exists (race condition fix), attach it immediately
+    if (el && el.srcObject) return;
+    if (el && remoteVideoRef._stream) {
+      el.srcObject = remoteVideoRef._stream;
+      el.play().catch(() => {});
+    }
+  }, []);
+
   // ── Video box JSX (inlined — not a component) ──────────────────────────
   const videoBox = (wrapStyle) => (
     <div style={{...s.videoWrap, ...wrapStyle}}>
-      <video ref={remoteVideoRef} autoPlay playsInline style={s.remoteVid}/>
+      <video ref={setRemoteVideoRef} autoPlay playsInline style={s.remoteVid}/>
       {videoOverlay}
       {interestBar}
       <div style={pipStyle}>
