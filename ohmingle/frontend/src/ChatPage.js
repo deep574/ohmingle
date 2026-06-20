@@ -2,6 +2,13 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
 
+// 🪙 Referral + Rewards system — see rewards.js for the localStorage
+// logic and an explanation of why cross-device referral credit isn't
+// implemented yet (TODO: migrate to a real DB before scaling).
+import { useCoins, addCoins, runDailyCheckIn, claimReferralWelcomeBonus, checkSessionChatBonus } from './rewards';
+import { CoinBadge, ShareButton, RewardToast } from './RewardsWidgets';
+import SpinWheel from './SpinWheel';
+
 const BACKEND_URL = 'https://ohmingle-backend-production-ff22.up.railway.app';
 
 const DARK = {
@@ -46,6 +53,12 @@ export default function ChatPage() {
   // 0 = none, 1 = first warning, 2 = second warning
   const [blackWarn, setBlackWarn] = useState(0);
 
+  // ── Rewards system (see rewards.js) ──────────────────
+  const coins = useCoins();
+  const [toast, setToast] = useState(null);
+  const [chatsThisSession, setChatsThisSession] = useState(0);
+  const [hasSpunThisSearch, setHasSpunThisSearch] = useState(false);
+
   /* ── Refs ──────────────────────────────────────────── */
   const localVideoRef    = useRef(null);
   const remoteVideoRef   = useRef(null);
@@ -65,6 +78,14 @@ export default function ChatPage() {
   /* ── Sync statusRef with status ────────────────────── */
   useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { blackWarnRef.current = blackWarn; }, [blackWarn]);
+
+  /* ── Rewards toast helper ──────────────────────────────
+     Used by daily check-in, referral welcome bonus, share bonus,
+     spin wheel wins, and the session chat bonus. Auto-dismisses. */
+  const showToast = useCallback((text, icon) => {
+    setToast({ text, icon });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
 
   /* ── Theme ─────────────────────────────────────────── */
   const T = isDark ? DARK : LIGHT;
@@ -91,6 +112,28 @@ export default function ChatPage() {
       .then(r => r.json())
       .then(d => { if (d.country_code) setMyFlag(countryToFlag(d.country_code)); })
       .catch(() => {});
+  }, []);
+
+  /* ══════════════════════════════════════════════════════
+     REWARDS: run once on mount
+     1) Daily check-in streak bonus
+     2) Referral welcome bonus (if this browser arrived via ?ref=CODE)
+  ══════════════════════════════════════════════════════ */
+  useEffect(() => {
+    const checkin = runDailyCheckIn();
+    if (checkin) {
+      showToast(`Day ${checkin.streak} streak! +${checkin.coinsAwarded} coins`, '🔥');
+    }
+
+    const welcome = claimReferralWelcomeBonus();
+    if (welcome) {
+      // Stagger so it doesn't visually collide with the streak toast
+      setTimeout(
+        () => showToast(`Welcome bonus! +${welcome.coinsAwarded} coins`, '🎁'),
+        checkin ? 3200 : 0
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ══════════════════════════════════════════════════════
@@ -209,10 +252,18 @@ export default function ChatPage() {
       statusRef.current = 'connected';
       setMessages([{ text: "✨ You're now chatting with someone new!", system: true }]);
 
-      // Stranger counter
+      // Stranger counter (all-time, persisted)
       setStrangerCount(prev => {
         const n = prev + 1;
         localStorage.setItem('ohmingle_count', String(n));
+        return n;
+      });
+
+      // 🪙 Session chat bonus — every X chats THIS session (not all-time)
+      setChatsThisSession(prev => {
+        const n = prev + 1;
+        const bonus = checkSessionChatBonus(n);
+        if (bonus > 0) showToast(`${n} chats this session! +${bonus} coins`, '💬');
         return n;
       });
 
@@ -341,6 +392,7 @@ export default function ChatPage() {
     setMessages([]);
     setMatchedInterests([]);
     setStrangerTyping(false);
+    setHasSpunThisSearch(false); // 🪙 fresh spin-wheel chance for this search
     setStatus('searching');
     statusRef.current = 'searching';
     socketRef.current?.emit('findStranger', { interests });
@@ -352,6 +404,7 @@ export default function ChatPage() {
     setMessages([]);
     setMatchedInterests([]);
     setStrangerTyping(false);
+    setHasSpunThisSearch(false); // 🪙 fresh spin-wheel chance for this search
     setStatus('searching');
     statusRef.current = 'searching';
     setTimeout(() => socketRef.current?.emit('findStranger', { interests }), 500);
@@ -396,6 +449,22 @@ export default function ChatPage() {
     closePeer();
     streamRef.current?.getTracks().forEach(t => t.stop());
     navigate('/');
+  };
+
+  // 🪙 Spin wheel win handler
+  const handleSpinWin = (amount) => {
+    addCoins(amount);
+    setHasSpunThisSearch(true);
+    showToast(`Spin win! +${amount} coins`, '🎡');
+  };
+
+  // 🪙 Share button feedback handler
+  const handleShared = ({ coinsAwarded, capped }) => {
+    if (coinsAwarded > 0) {
+      showToast(`Thanks for sharing! +${coinsAwarded} coins`, '🎁');
+    } else if (capped) {
+      showToast('Daily share bonus reached — link copied!', '📋');
+    }
   };
 
   const isIdle      = status === 'idle' || status === 'strangerLeft';
@@ -479,6 +548,8 @@ export default function ChatPage() {
           <div style={s.spinner} />
           <p style={s.ovBig}>Finding stranger...</p>
           <p style={s.ovSub}>This takes a few seconds</p>
+          {/* 🪙 Cosmetic spin wheel — keeps people from bouncing while waiting */}
+          <SpinWheel onWin={handleSpinWin} disabled={hasSpunThisSearch} />
         </>
       )}
       {status === 'strangerLeft' && (
@@ -587,19 +658,22 @@ export default function ChatPage() {
       <style>{CSS}</style>
       {reportModal}
       {blackWarnModal}
+      {toast && <RewardToast toast={toast} />}
 
       {/* Header */}
       <div style={{ ...s.header, background: T.header, borderBottom: `1px solid ${T.headerBorder}` }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ ...s.logo, color: T.logo }} onClick={goHome}>
             Ohm<span style={{ color: '#a855f7' }}>ingle</span>
           </span>
           <span style={{ background: isDark?'#1e293b':'#f1f5f9', color: T.subText, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20, border: `1px solid ${T.headerBorder}` }}>
             👥 {strangerCount} met
           </span>
+          <CoinBadge coins={coins} isDark={isDark} T={T} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ ...s.online, color: T.subText }}><span style={s.dot}/>{onlineCount} online</span>
+          <ShareButton isDark={isDark} T={T} onShared={handleShared} />
           <button type="button" onClick={toggleTheme} style={{ background: 'transparent', border: `1px solid ${T.headerBorder}`, borderRadius: 20, padding: '4px 10px', fontSize: 16, cursor: 'pointer' }}>
             {isDark ? '☀️' : '🌙'}
           </button>
@@ -641,6 +715,7 @@ export default function ChatPage() {
       <style>{CSS}</style>
       {reportModal}
       {blackWarnModal}
+      {toast && <RewardToast toast={toast} />}
 
       {/* Header */}
       <div style={{ ...s.header, background: T.header, borderBottom: `1px solid ${T.headerBorder}` }}>
@@ -651,9 +726,11 @@ export default function ChatPage() {
           <span style={{ background: isDark?'#1e293b':'#f1f5f9', color: T.subText, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20, border: `1px solid ${T.headerBorder}` }}>
             👥 {strangerCount} met
           </span>
+          <CoinBadge coins={coins} isDark={isDark} T={T} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ ...s.online, color: T.subText }}><span style={s.dot}/>{onlineCount} online</span>
+          <ShareButton isDark={isDark} T={T} onShared={handleShared} />
           <button type="button" onClick={toggleTheme} style={{ background: 'transparent', border: `1px solid ${T.headerBorder}`, borderRadius: 20, padding: '4px 12px', fontSize: 16, cursor: 'pointer' }}>
             {isDark ? '☀️' : '🌙'}
           </button>
@@ -704,6 +781,8 @@ export default function ChatPage() {
 const CSS = `
   @keyframes spin  { to { transform: rotate(360deg); } }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  @keyframes toastIn  { from { opacity:0; transform: translate(-50%,-12px); } to { opacity:1; transform: translate(-50%,0); } }
+  @keyframes toastOut { from { opacity:1; } to { opacity:0; } }
   *, *::before, *::after { box-sizing: border-box; }
   html, body { margin:0; padding:0; }
   input::placeholder { color: #475569; }
