@@ -4,13 +4,12 @@ import io from 'socket.io-client';
 
 const BACKEND_URL = 'https://ohmingle-backend-production-ff22.up.railway.app';
 
-// ── THEMES ────────────────────────────────────────────────────────────────────
 const DARK = {
   page:'#0a0a0f', header:'#0a0a0f', headerBorder:'#1e293b',
   logo:'#fff', chat:'#0f172a', chatBorder:'#1e293b',
-  bubble:'#1e293b', input:'#0f172a', inputBorder:'#1e293b',
+  bubble:'#1e293b', input:'#0f172a', inputBorder:'#2d3748',
   text:'#e2e8f0', subText:'#94a3b8', hint:'#475569',
-  bar:'#060608', barBorder:'#1e293b', sysMsg:'#7c3aed',
+  bar:'#060608', barBorder:'#1e293b', sysMsg:'#a855f7',
 };
 const LIGHT = {
   page:'#f1f5f9', header:'#ffffff', headerBorder:'#e2e8f0',
@@ -20,81 +19,146 @@ const LIGHT = {
   bar:'#ffffff', barBorder:'#e2e8f0', sysMsg:'#7c3aed',
 };
 
-function ChatPage() {
+function countryToFlag(code) {
+  return code.toUpperCase().split('').map(c =>
+    String.fromCodePoint(127397 + c.charCodeAt(0))
+  ).join('');
+}
+
+export default function ChatPage() {
   const navigate = useNavigate();
 
-  // ── EXISTING state ─────────────────────────────────────────────────────────
-  const [status, setStatus]           = useState('idle');
-  const [messages, setMessages]       = useState([]);
-  const [inputMsg, setInputMsg]       = useState('');
-  const [onlineCount, setOnlineCount] = useState(0);
-  const [showReport, setShowReport]   = useState(false);
-  const [isMobile, setIsMobile]       = useState(window.innerWidth < 1024);
+  /* ── State ─────────────────────────────────────────── */
+  const [status,          setStatus]          = useState('idle');
+  const [messages,        setMessages]        = useState([]);
+  const [inputMsg,        setInputMsg]        = useState('');
+  const [onlineCount,     setOnlineCount]     = useState(0);
+  const [showReport,      setShowReport]      = useState(false);
+  const [isMobile,        setIsMobile]        = useState(false);
+  const [isDark,          setIsDark]          = useState(() => localStorage.getItem('ohmingle_theme') !== 'light');
+  const [strangerCount,   setStrangerCount]   = useState(() => parseInt(localStorage.getItem('ohmingle_count') || '0'));
+  const [myFlag,          setMyFlag]          = useState('🌍');
+  const [strangerTyping,  setStrangerTyping]  = useState(false);
+  const [interests,       setInterests]       = useState(() => JSON.parse(localStorage.getItem('ohmingle_interests') || '[]'));
+  const [matchedInterests,setMatchedInterests]= useState([]);
 
-  // ── FEATURE 1: Stranger counter ────────────────────────────────────────────
-  const [strangerCount, setStrangerCount] = useState(
-    () => parseInt(localStorage.getItem('ohmingle_count') || '0')
-  );
+  // ── Black screen warning state ──────────────────────
+  // 0 = none, 1 = first warning, 2 = second warning
+  const [blackWarn, setBlackWarn] = useState(0);
 
-  // ── FEATURE 2: Theme toggle ────────────────────────────────────────────────
-  const [isDark, setIsDark] = useState(
-    () => localStorage.getItem('ohmingle_theme') !== 'light'
-  );
-  const T = isDark ? DARK : LIGHT; // current theme colors
+  /* ── Refs ──────────────────────────────────────────── */
+  const localVideoRef    = useRef(null);
+  const remoteVideoRef   = useRef(null);
+  const peerRef          = useRef(null);
+  const streamRef        = useRef(null);
+  const socketRef        = useRef(null);
+  const statusRef        = useRef('idle');         // sync ref for async callbacks
+  const messagesEndRef   = useRef(null);
+  const inputRef         = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const myTypingRef      = useRef(false);
+  const myTypingTimeout  = useRef(null);
+  const blackCountRef    = useRef(0);              // consecutive black-screen checks
+  const blackIntervalRef = useRef(null);
+  const blackWarnRef     = useRef(0);              // sync ref for blackWarn
 
-  const toggleTheme = () => {
-    setIsDark(prev => {
-      const next = !prev;
-      localStorage.setItem('ohmingle_theme', next ? 'dark' : 'light');
-      return next;
-    });
-  };
+  /* ── Sync statusRef with status ────────────────────── */
+  useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { blackWarnRef.current = blackWarn; }, [blackWarn]);
 
-  // ── FEATURE 3: Country flag ────────────────────────────────────────────────
-  const [myFlag, setMyFlag] = useState('🌍');
+  /* ── Theme ─────────────────────────────────────────── */
+  const T = isDark ? DARK : LIGHT;
+  const toggleTheme = () => setIsDark(p => {
+    const n = !p;
+    localStorage.setItem('ohmingle_theme', n ? 'dark' : 'light');
+    return n;
+  });
 
+  /* ── Mobile detection ──────────────────────────────── */
+  useEffect(() => {
+    const check = () => {
+      const touch  = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      setIsMobile(touch || window.innerWidth < 1024);
+    };
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+
+  /* ── Country flag ──────────────────────────────────── */
   useEffect(() => {
     fetch('https://ipapi.co/json/')
       .then(r => r.json())
       .then(d => { if (d.country_code) setMyFlag(countryToFlag(d.country_code)); })
-      .catch(() => {}); // silent fail
+      .catch(() => {});
   }, []);
 
-  // ── FEATURE 5: Typing indicator ────────────────────────────────────────────
-  const [strangerTyping, setStrangerTyping] = useState(false);
-  const typingTimeoutRef = useRef(null);
-  const myTypingRef      = useRef(false);
-  const myTypingTimeout  = useRef(null);
+  /* ══════════════════════════════════════════════════════
+     BLACK SCREEN DETECTION
+     Checks remote video brightness every 500ms.
+     3 sec black → Warning 1.
+     6 more sec black after warn 1 → Warning 2.
+  ══════════════════════════════════════════════════════ */
+  const checkBlackScreen = useCallback(() => {
+    const video = remoteVideoRef.current;
+    if (!video || statusRef.current !== 'connected') {
+      blackCountRef.current = 0;
+      return;
+    }
+    // Video not ready / no dimensions = not a black screen issue
+    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+      blackCountRef.current = 0;
+      return;
+    }
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width  = 32;
+      canvas.height = 24;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, 32, 24);
+      const data  = ctx.getImageData(0, 0, 32, 24).data;
+      let total   = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        total += (data[i] + data[i + 1] + data[i + 2]) / 3;
+      }
+      const avg = total / (data.length / 4);
 
-  // ── FEATURE 6: Safe mode ───────────────────────────────────────────────────
-  const [safeMode, setSafeMode] = useState(true);
-  const [safeTimer, setSafeTimer] = useState(false);
-  const safeTimerRef = useRef(null);
-
-  // ── FEATURE 7: Interest tags ───────────────────────────────────────────────
-  const [interests, setInterests] = useState(
-    () => JSON.parse(localStorage.getItem('ohmingle_interests') || '[]')
-  );
-  const [matchedInterests, setMatchedInterests] = useState([]);
-
-  // ── EXISTING refs ──────────────────────────────────────────────────────────
-  const localVideoRef  = useRef(null);
-  const remoteVideoRef = useRef(null);
-  const peerRef        = useRef(null);
-  const streamRef      = useRef(null);
-  const socketRef      = useRef(null);
-  const statusRef      = useRef('idle');
-  const messagesEndRef = useRef(null);
-
-  useEffect(() => { statusRef.current = status; }, [status]);
+      if (avg < 12) {
+        blackCountRef.current++;
+        // 6 checks × 500ms = ~3 seconds
+        if (blackCountRef.current === 6 && blackWarnRef.current === 0) {
+          setBlackWarn(1);
+        }
+        // 18 more checks (9s) after first warning
+        if (blackCountRef.current === 24 && blackWarnRef.current === 1) {
+          setBlackWarn(2);
+        }
+      } else {
+        // Screen is not black — reset
+        blackCountRef.current = 0;
+        if (blackWarnRef.current > 0) setBlackWarn(0);
+      }
+    } catch (e) {
+      // Ignore canvas errors
+    }
+  }, []);
 
   useEffect(() => {
-    const fn = () => setIsMobile(window.innerWidth < 1024);
-    window.addEventListener('resize', fn);
-    return () => window.removeEventListener('resize', fn);
-  }, []);
+    if (status === 'connected') {
+      blackCountRef.current = 0;
+      setBlackWarn(0);
+      blackIntervalRef.current = setInterval(checkBlackScreen, 500);
+    } else {
+      clearInterval(blackIntervalRef.current);
+      setBlackWarn(0);
+      blackCountRef.current = 0;
+    }
+    return () => clearInterval(blackIntervalRef.current);
+  }, [status, checkBlackScreen]);
 
-  // ── EXISTING: Camera starts once ──────────────────────────────────────────
+  /* ══════════════════════════════════════════════════════
+     CAMERA (init once, never re-init)
+  ══════════════════════════════════════════════════════ */
   useEffect(() => {
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(stream => {
@@ -107,6 +171,7 @@ function ChatPage() {
       .catch(() => alert('Please allow camera & microphone!'));
   }, []);
 
+  // Callback ref for local video — reassigns srcObject on remount
   const setLocalVideoRef = useCallback(el => {
     localVideoRef.current = el;
     if (el && streamRef.current) {
@@ -115,41 +180,47 @@ function ChatPage() {
     }
   }, []);
 
-  // ── EXISTING: Socket starts once ──────────────────────────────────────────
+  /* ══════════════════════════════════════════════════════
+     SOCKET (init once, never re-init)
+  ══════════════════════════════════════════════════════ */
   useEffect(() => {
+    // ✅ Websocket first — avoids polling-to-websocket upgrade
+    //    which can cause brief socket ID changes on some proxies
     const socket = io(BACKEND_URL, {
-      transports: ['polling', 'websocket'],
+      transports: ['websocket', 'polling'],
       forceNew: true,
     });
     socketRef.current = socket;
 
-    socket.on('connect', () => console.log('✅ Connected:', socket.id));
-    socket.on('onlineCount', n => setOnlineCount(n));
-    socket.on('waiting', () => setStatus('waiting'));
+    socket.on('connect',     () => console.log('✅ Connected:', socket.id));
+    socket.on('onlineCount', n  => setOnlineCount(n));
+    socket.on('waiting',     () => setStatus('waiting'));
 
     socket.on('strangerFound', async ({ role, commonInterests }) => {
+      // ✅ CRITICAL FIX: Guard against double-match.
+      //    If server somehow sends strangerFound twice, ignore the second one.
+      //    Without this, makePeer() on the second call closes the live connection.
+      if (statusRef.current === 'connected') {
+        console.warn('🔒 Ignoring duplicate strangerFound — already connected');
+        return;
+      }
+
       setStatus('connected');
       statusRef.current = 'connected';
       setMessages([{ text: "✨ You're now chatting with someone new!", system: true }]);
 
-      // ── FEATURE 1: Increment counter ──────────────────────────────────────
+      // Stranger counter
       setStrangerCount(prev => {
-        const next = prev + 1;
-        localStorage.setItem('ohmingle_count', String(next));
-        return next;
+        const n = prev + 1;
+        localStorage.setItem('ohmingle_count', String(n));
+        return n;
       });
 
-      // ── FEATURE 6: Start safe mode auto-remove timer ───────────────────────
-      if (safeTimerRef.current) clearTimeout(safeTimerRef.current);
-      setSafeTimer(false);
-      safeTimerRef.current = setTimeout(() => setSafeTimer(true), 5000);
+      // Matched interests
+      setMatchedInterests(commonInterests && commonInterests.length > 0 ? commonInterests : []);
 
-      // ── FEATURE 7: Show matched interests ─────────────────────────────────
-      if (commonInterests && commonInterests.length > 0) {
-        setMatchedInterests(commonInterests);
-      } else {
-        setMatchedInterests([]);
-      }
+      // Focus input
+      setTimeout(() => inputRef.current?.focus(), 200);
 
       if (role === 'caller') {
         const pc = makePeer(socket);
@@ -160,6 +231,11 @@ function ChatPage() {
     });
 
     socket.on('offer', async offer => {
+      // ✅ If peer already exists and connection is established, don't recreate
+      if (peerRef.current && peerRef.current.connectionState === 'connected') {
+        console.warn('🔒 Ignoring offer — peer already connected');
+        return;
+      }
       const pc = makePeer(socket);
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
@@ -168,15 +244,18 @@ function ChatPage() {
     });
 
     socket.on('answer', async answer => {
-      if (peerRef.current)
+      if (peerRef.current) {
         await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+      }
     });
 
     socket.on('iceCandidate', async c => {
-      if (peerRef.current)
+      if (peerRef.current) {
         try { await peerRef.current.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+      }
     });
 
+    // ✅ 'message' event ONLY updates chat — completely isolated
     socket.on('message', data => {
       setMessages(prev => [...prev, { text: data.text, from: 'stranger' }]);
     });
@@ -187,30 +266,29 @@ function ChatPage() {
       closePeer();
       setMatchedInterests([]);
       setStrangerTyping(false);
-      if (safeTimerRef.current) clearTimeout(safeTimerRef.current);
-      setSafeTimer(false);
       setMessages(prev => [...prev, { text: '👋 Stranger disconnected.', system: true }]);
     });
 
-    // ── FEATURE 5: Typing indicator from stranger ──────────────────────────
     socket.on('typing', () => {
       setStrangerTyping(true);
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => setStrangerTyping(false), 2000);
     });
 
     return () => {
       socket.disconnect();
       closePeer();
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-      if (safeTimerRef.current) clearTimeout(safeTimerRef.current);
+      clearTimeout(typingTimeoutRef.current);
+      clearInterval(blackIntervalRef.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  /* ── Peer helpers ──────────────────────────────────── */
   function makePeer(socket) {
     closePeer();
     const pc = new RTCPeerConnection({
@@ -219,14 +297,35 @@ function ChatPage() {
         { urls: 'stun:stun1.l.google.com:19302' },
       ],
     });
+
     if (streamRef.current)
       streamRef.current.getTracks().forEach(t => pc.addTrack(t, streamRef.current));
+
     pc.ontrack = e => {
-      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = e.streams[0];
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = e.streams[0];
+        remoteVideoRef.current.play().catch(() => {});
+      }
     };
+
     pc.onicecandidate = e => {
       if (e.candidate) socket.emit('iceCandidate', e.candidate);
     };
+
+    // ✅ Monitor ICE state — log failures for debugging
+    pc.oniceconnectionstatechange = () => {
+      console.log('ICE state:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
+        console.warn('ICE connection failed — attempting restart');
+        pc.restartIce(); // Try to recover automatically
+      }
+    };
+
+    // ✅ Monitor overall connection state
+    pc.onconnectionstatechange = () => {
+      console.log('Peer connection state:', pc.connectionState);
+    };
+
     peerRef.current = pc;
     return pc;
   }
@@ -236,6 +335,7 @@ function ChatPage() {
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
   }
 
+  /* ── Actions ───────────────────────────────────────── */
   const findStranger = () => {
     closePeer();
     setMessages([]);
@@ -243,7 +343,6 @@ function ChatPage() {
     setStrangerTyping(false);
     setStatus('searching');
     statusRef.current = 'searching';
-    // ── FEATURE 7: Send interests with findStranger ────────────────────────
     socketRef.current?.emit('findStranger', { interests });
   };
 
@@ -253,13 +352,12 @@ function ChatPage() {
     setMessages([]);
     setMatchedInterests([]);
     setStrangerTyping(false);
-    if (safeTimerRef.current) clearTimeout(safeTimerRef.current);
-    setSafeTimer(false);
     setStatus('searching');
     statusRef.current = 'searching';
     setTimeout(() => socketRef.current?.emit('findStranger', { interests }), 500);
   };
 
+  // ✅ sendMessage: only emits 'message', never touches connection
   const sendMessage = () => {
     const text = inputMsg.trim();
     if (!text) return;
@@ -267,36 +365,25 @@ function ChatPage() {
     socketRef.current?.emit('message', { text });
     setMessages(prev => [...prev, { text, from: 'me' }]);
     setInputMsg('');
-    // Stop my typing indicator
-    if (myTypingTimeout.current) clearTimeout(myTypingTimeout.current);
+    clearTimeout(myTypingTimeout.current);
     myTypingRef.current = false;
   };
 
-  // ── FEATURE 5: Emit typing when user types ─────────────────────────────
-  const handleInputChange = (e) => {
+  const handleInputChange = e => {
     setInputMsg(e.target.value);
     if (statusRef.current !== 'connected') return;
     if (!myTypingRef.current) {
       myTypingRef.current = true;
       socketRef.current?.emit('typing');
     }
-    if (myTypingTimeout.current) clearTimeout(myTypingTimeout.current);
-    myTypingTimeout.current = setTimeout(() => {
-      myTypingRef.current = false;
-    }, 1000);
+    clearTimeout(myTypingTimeout.current);
+    myTypingTimeout.current = setTimeout(() => { myTypingRef.current = false; }, 1000);
   };
 
-  // ── FEATURE 4: Send emoji reaction ────────────────────────────────────
-  const sendReaction = (emoji) => {
-    if (statusRef.current !== 'connected') { alert('Connect to a stranger first!'); return; }
+  const sendReaction = emoji => {
+    if (statusRef.current !== 'connected') return;
     socketRef.current?.emit('message', { text: emoji });
     setMessages(prev => [...prev, { text: emoji, from: 'me' }]);
-  };
-
-  const goHome = () => {
-    closePeer();
-    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-    navigate('/');
   };
 
   const reportStranger = reason => {
@@ -305,330 +392,385 @@ function ChatPage() {
     skipStranger();
   };
 
+  const goHome = () => {
+    closePeer();
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    navigate('/');
+  };
+
   const isIdle      = status === 'idle' || status === 'strangerLeft';
   const isSearching = status === 'searching' || status === 'waiting';
 
-  // ── FEATURE 6: Blur logic ──────────────────────────────────────────────
-  const showBlur = safeMode && status === 'connected' && !safeTimer;
+  /* ══════════════════════════════════════════════════════
+     RENDER
+     ✅ CRITICAL FIX: ALL JSX is INLINED — no inner component
+     functions like const Header = () => (...) inside ChatPage.
+     When inner component functions are used, every ChatPage
+     state change creates a new function reference, React sees
+     a "new component type", and UNMOUNTS + REMOUNTS everything.
+     This clears remoteVideoRef.current.srcObject → black screen.
+     Inlining JSX prevents this — React only updates changed attrs.
+  ══════════════════════════════════════════════════════ */
 
-  // ── SHARED RENDER PIECES ───────────────────────────────────────────────────
+  // ── Computed values ─────────────────────────────────
+  const pipStyle     = isMobile ? s.mobPip  : s.deskPip;
 
-  const Header = () => (
-    <div style={{...s.header, background:T.header, borderBottom:`1px solid ${T.headerBorder}`}}>
-      {/* Logo + counter */}
-      <div style={{display:'flex', alignItems:'center', gap:12}}>
-        <span style={{...s.logo, color:T.logo}} onClick={goHome}>
-          Ohm<span style={{color:'#a855f7'}}>ingle</span>
-        </span>
-        {/* FEATURE 1: Stranger counter */}
-        <span style={{
-          background: isDark ? '#1e293b' : '#f1f5f9',
-          color: T.subText,
-          fontSize:11, fontWeight:700,
-          padding:'3px 8px', borderRadius:20,
-          border:`1px solid ${T.headerBorder}`
-        }}>
-          👥 {strangerCount} met
-        </span>
-      </div>
-
-      {/* Right side controls */}
-      <div style={{display:'flex', alignItems:'center', gap:10}}>
-        <span style={{...s.online, color:T.subText}}>
-          <span style={s.dot}/>{onlineCount} online
-        </span>
-
-        {/* FEATURE 6: Safe mode toggle */}
-        <button onClick={() => setSafeMode(p=>!p)} style={{
-          background: safeMode ? '#7c3aed' : (isDark?'#1e293b':'#e2e8f0'),
-          border:'none', borderRadius:20,
-          padding:'4px 10px', fontSize:11, fontWeight:700,
-          color: safeMode ? '#fff' : T.subText, cursor:'pointer'
-        }}>
-          {safeMode ? '🛡️ Safe' : '🛡️ Off'}
-        </button>
-
-        {/* FEATURE 2: Theme toggle */}
-        <button onClick={toggleTheme} style={{
-          background:'transparent', border:`1px solid ${T.headerBorder}`,
-          borderRadius:20, padding:'4px 10px',
-          fontSize:16, cursor:'pointer'
-        }}>
-          {isDark ? '☀️' : '🌙'}
+  // ── Report modal JSX ────────────────────────────────
+  const reportModal = showReport && (
+    <div style={s.modalBg}>
+      <div style={{ ...s.modal, background: isDark ? '#0f172a' : '#fff', border: `1px solid ${T.headerBorder}` }}>
+        <h3 style={{ ...s.modalH, color: T.logo }}>🚩 Report Stranger</h3>
+        <p style={{ ...s.modalSub, color: T.subText }}>Why are you reporting?</p>
+        {['🔞 Nudity/Sexual Content','😠 Harassment','🤖 Spam/Bot','👶 Underage','⚠️ Other'].map(r => (
+          <button type="button" key={r}
+            style={{ ...s.modalOpt, background: T.bubble, color: T.text, border: `1px solid ${T.inputBorder}` }}
+            onClick={() => reportStranger(r)}>{r}
+          </button>
+        ))}
+        <button type="button"
+          style={{ ...s.modalCancel, color: T.subText, border: `1px solid ${T.inputBorder}` }}
+          onClick={() => setShowReport(false)}>Cancel
         </button>
       </div>
     </div>
   );
 
-  const VideoArea = ({ pipStyle, wrapStyle }) => (
-    <div style={{...s.videoWrap, ...wrapStyle}}>
-      {/* LARGE: remote/stranger video */}
-      <video
-        ref={remoteVideoRef}
-        autoPlay playsInline
-        style={{
-          ...s.remoteVid,
-          // FEATURE 6: blur filter
-          filter: showBlur ? 'blur(12px)' : 'none',
-          transition: 'filter 0.8s ease',
-        }}
-      />
-
-      {/* FEATURE 6: safe mode overlay text */}
-      {showBlur && (
-        <div style={{
-          position:'absolute', inset:0, display:'flex', flexDirection:'column',
-          alignItems:'center', justifyContent:'center', zIndex:6, gap:8
-        }}>
-          <span style={{fontSize:32}}>🛡️</span>
-          <p style={{color:'#fff', fontSize:14, fontWeight:700, margin:0, textAlign:'center'}}>
-            Safe Mode Active
-          </p>
-          <p style={{color:'#94a3b8', fontSize:12, margin:0, textAlign:'center'}}>
-            Video blurs for 5 seconds
-          </p>
+  /* ══════════════════════════════════════════════════════
+     BLACK SCREEN WARNING MODALS
+  ══════════════════════════════════════════════════════ */
+  const blackWarnModal = blackWarn > 0 && (
+    <div style={s.modalBg}>
+      <div style={{ ...s.modal, background: isDark ? '#0f172a' : '#fff', border: '1px solid #f97316', maxWidth: 320 }}>
+        <span style={{ fontSize: 36, textAlign: 'center', display: 'block' }}>
+          {blackWarn === 1 ? '📷' : '⚠️'}
+        </span>
+        <h3 style={{ color: '#f97316', fontSize: 17, fontWeight: 800, textAlign: 'center', margin: '8px 0 4px' }}>
+          {blackWarn === 1 ? 'Camera Not Detected' : 'Camera Still Unavailable'}
+        </h3>
+        <p style={{ color: T.subText, fontSize: 13, textAlign: 'center', margin: '0 0 12px', lineHeight: 1.5 }}>
+          {blackWarn === 1
+            ? "The stranger's camera feed appears black or unavailable. This may be a connection or camera issue."
+            : "The stranger's camera is still not working. The video feed remains unavailable."}
+        </p>
+        <div style={{ display: 'flex', gap: 8, flexDirection: 'column' }}>
+          <button type="button"
+            style={{ ...s.modalOpt, background: '#7c3aed', color: '#fff', border: 'none', textAlign: 'center', fontWeight: 700 }}
+            onClick={() => { setBlackWarn(0); blackCountRef.current = 0; }}>
+            Continue Anyway
+          </button>
+          <button type="button"
+            style={{ ...s.modalOpt, background: '#ef4444', color: '#fff', border: 'none', textAlign: 'center', fontWeight: 700 }}
+            onClick={() => { setBlackWarn(0); skipStranger(); }}>
+            Skip This Person
+          </button>
         </div>
-      )}
-
-      {/* Overlay when not connected */}
-      {status !== 'connected' && (
-        <div style={s.overlay}>
-          {status === 'idle' && <p style={s.ovBig}>👋 {isMobile?'Tap':'Click'} Start!</p>}
-          {isSearching && <>
-            <div style={s.spinner}/>
-            <p style={s.ovBig}>Finding stranger...</p>
-            <p style={s.ovSub}>This takes a few seconds</p>
-          </>}
-          {status === 'strangerLeft' && <>
-            <p style={s.ovBig}>👋 Stranger left!</p>
-            <p style={s.ovSub}>Click Next to find someone</p>
-          </>}
-        </div>
-      )}
-
-      {/* SMALL: your video PiP */}
-      <div style={pipStyle}>
-        <video ref={setLocalVideoRef} autoPlay playsInline muted style={s.pipVid} />
-        {/* FEATURE 3: your country flag */}
-        <span style={s.youTxt}>{myFlag} You</span>
       </div>
+    </div>
+  );
 
-      {/* Bottom bar */}
-      <div style={s.vBottom}>
-        <span style={s.brand}>Ohmingle.com</span>
-        <button style={s.flagBtn} onClick={() => setShowReport(true)}>🚩</button>
-      </div>
-
-      {/* FEATURE 7: Matched interests bar */}
-      {matchedInterests.length > 0 && (
-        <div style={{
-          position:'absolute', top:10, left:10, right: isMobile?100:170,
-          display:'flex', gap:6, flexWrap:'wrap', zIndex:15
-        }}>
-          <span style={{color:'#fff', fontSize:11, fontWeight:700, background:'rgba(124,58,237,0.8)', padding:'3px 8px', borderRadius:10}}>
-            ✨ Both like:
-          </span>
-          {matchedInterests.map(i => (
-            <span key={i} style={{background:'rgba(34,197,94,0.8)', color:'#fff', fontSize:11, fontWeight:700, padding:'3px 8px', borderRadius:10}}>
-              {i}
-            </span>
-          ))}
-        </div>
+  // ── Video overlay (when not connected) ──────────────
+  const videoOverlay = status !== 'connected' && (
+    <div style={s.overlay}>
+      {status === 'idle' && (
+        <p style={s.ovBig}>👋 {isMobile ? 'Tap' : 'Click'} Start!</p>
+      )}
+      {isSearching && (
+        <>
+          <div style={s.spinner} />
+          <p style={s.ovBig}>Finding stranger...</p>
+          <p style={s.ovSub}>This takes a few seconds</p>
+        </>
+      )}
+      {status === 'strangerLeft' && (
+        <>
+          <p style={s.ovBig}>👋 Stranger left!</p>
+          <p style={s.ovSub}>Click Next to find someone new</p>
+        </>
       )}
     </div>
   );
 
-  const ChatArea = ({ style }) => (
-    <div style={{...s.chatBox, background:T.chat, border:`1px solid ${T.chatBorder}`, ...style}}>
+  // ── Matched interests bar ────────────────────────────
+  const interestBar = matchedInterests.length > 0 && (
+    <div style={{ position: 'absolute', top: 10, left: 10, right: isMobile ? 100 : 170, display: 'flex', gap: 6, flexWrap: 'wrap', zIndex: 15 }}>
+      <span style={{ color: '#fff', fontSize: 11, fontWeight: 700, background: 'rgba(124,58,237,0.85)', padding: '3px 8px', borderRadius: 10 }}>✨ Both like:</span>
+      {matchedInterests.map(i => (
+        <span key={i} style={{ background: 'rgba(34,197,94,0.85)', color: '#fff', fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 10 }}>{i}</span>
+      ))}
+    </div>
+  );
+
+  // ── Messages content ─────────────────────────────────
+  const messagesContent = (
+    <>
       {messages.length === 0 && (
-        <p style={{...s.hint, color:T.hint}}>
-          {status==='idle'      ? '👇 Click Start to find someone' :
-           isSearching          ? '🔍 Searching...'                :
-           status==='connected' ? '👋 Say hello!'                  :
-                                  'Stranger left. Click Next!'}
+        <p style={{ ...s.hint, color: T.hint }}>
+          {status === 'idle'       ? '👇 Click Start to find someone' :
+           isSearching             ? '🔍 Searching...'                 :
+           status === 'connected'  ? '👋 Say hello!'                   :
+                                     'Stranger left. Click Next!'}
         </p>
       )}
       {messages.map((msg, i) =>
         msg.system
-          ? <p key={i} style={{...s.sysMsg, color:T.sysMsg}}>{msg.text}</p>
-          : <div key={i} style={{
+          ? <p key={i} style={{ ...s.sysMsg, color: T.sysMsg }}>{msg.text}</p>
+          : (
+            <div key={i} style={{
               ...s.bubble,
-              alignSelf: msg.from==='me' ? 'flex-end' : 'flex-start',
-              background: msg.from==='me' ? '#7c3aed' : T.bubble,
-              color: msg.from==='me' ? '#fff' : T.text,
+              alignSelf: msg.from === 'me' ? 'flex-end' : 'flex-start',
+              background: msg.from === 'me' ? '#7c3aed' : T.bubble,
+              color: msg.from === 'me' ? '#fff' : T.text,
             }}>
-              <span style={{...s.bName, color: msg.from==='me'?'rgba(255,255,255,0.5)':T.subText}}>
-                {msg.from==='me'?'You':'Stranger'}
+              <span style={{ ...s.bName, color: msg.from === 'me' ? 'rgba(255,255,255,0.5)' : T.subText }}>
+                {msg.from === 'me' ? 'You' : 'Stranger'}
               </span>
               {msg.text}
             </div>
+          )
       )}
-      {/* FEATURE 5: Typing indicator */}
       {strangerTyping && (
-        <div style={{display:'flex', alignItems:'center', gap:6, padding:'4px 0'}}>
-          <span style={{color:T.subText, fontSize:12, fontStyle:'italic'}}>Stranger is typing</span>
-          <span style={{color:'#a855f7', fontSize:16, animation:'pulse 1s infinite'}}>●●●</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0' }}>
+          <span style={{ color: T.subText, fontSize: 12, fontStyle: 'italic' }}>Stranger is typing</span>
+          <span style={{ color: '#a855f7', fontSize: 14, animation: 'pulse 1s infinite' }}>●●●</span>
         </div>
       )}
-      <div ref={messagesEndRef}/>
-    </div>
+      <div ref={messagesEndRef} />
+    </>
   );
 
-  const Controls = ({ desk }) => (
-    <div style={{
-      display:'flex', gap:desk?10:8,
-      padding: desk?'12px 18px':'8px 10px 12px',
-      flexShrink:0, alignItems:'center',
-      background: T.bar, borderTop:`1px solid ${T.barBorder}`,
-      flexDirection:'column',
-    }}>
-      {/* FEATURE 4: Reaction buttons row */}
-      <div style={{display:'flex', gap:6, width:'100%'}}>
+  // ── Controls content ─────────────────────────────────
+  const controlsContent = (
+    <>
+      {/* Reaction emojis */}
+      <div style={{ display: 'flex', gap: 6, width: '100%', marginBottom: 6 }}>
         {['👍','❤️','😂','😮','🔥'].map(emoji => (
-          <button key={emoji} onClick={() => sendReaction(emoji)} style={{
-            background: isDark?'#1e293b':'#f1f5f9',
+          <button type="button" key={emoji} onClick={() => sendReaction(emoji)} style={{
+            background: isDark ? '#1e293b' : '#f1f5f9',
             border: `1px solid ${T.inputBorder}`,
-            borderRadius:20, padding:'4px 10px',
-            fontSize:16, cursor:'pointer', flex:1,
-          }}>
-            {emoji}
-          </button>
+            borderRadius: 20, padding: '4px 0',
+            fontSize: 16, cursor: 'pointer', flex: 1,
+          }}>{emoji}</button>
         ))}
       </div>
-
-      {/* Main controls row */}
-      <div style={{display:'flex', gap:desk?10:8, width:'100%', alignItems:'center'}}>
+      {/* Main row */}
+      <div style={{ display: 'flex', gap: 8, width: '100%', alignItems: 'center' }}>
+        {/* ✅ type="button" prevents Enter key from triggering these buttons */}
         {isIdle
-          ? <button style={s.nextBtn} onClick={findStranger}>▶▶ Start</button>
-          : <button style={s.nextBtn} onClick={skipStranger}>▶▶ Next</button>}
-        <button style={s.stopBtn} onClick={goHome}>■</button>
+          ? <button type="button" style={s.nextBtn} onClick={findStranger}>▶▶ Start</button>
+          : <button type="button" style={s.nextBtn} onClick={skipStranger}>▶▶ Next</button>
+        }
+        <button type="button" style={s.stopBtn} onClick={goHome}>■</button>
+        {/* ✅ onKeyDown + preventDefault + stopPropagation stops Enter bubbling to buttons */}
         <input
-          style={{...s.input, background:T.input, border:`1px solid ${T.inputBorder}`, color:T.text, fontSize:desk?15:14}}
-          type="text" placeholder="Type message..."
+          ref={inputRef}
+          style={{ ...s.input, background: T.input, border: `1px solid ${T.inputBorder}`, color: T.text }}
+          type="text"
+          placeholder="Type message..."
           value={inputMsg}
           onChange={handleInputChange}
-          onKeyDown={e => { if(e.key==='Enter'){e.preventDefault();sendMessage();} }}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              e.stopPropagation();
+              sendMessage();
+            }
+          }}
         />
-        <button style={s.sendBtn} onClick={sendMessage}>➤</button>
+        <button type="button" style={s.sendBtn} onClick={sendMessage}>➤</button>
       </div>
-    </div>
+    </>
   );
 
-  /* ── MOBILE ─────────────────────────────────────────────────────────────── */
+  /* ── MOBILE LAYOUT ──────────────────────────────────── */
   if (isMobile) return (
-    <div style={{...s.page, background:T.page}}>
+    <div style={{ ...s.page, background: T.page }}>
       <style>{CSS}</style>
-      {showReport && <Modal onReport={reportStranger} onClose={() => setShowReport(false)} isDark={isDark} T={T}/>}
-      <Header />
-      <VideoArea pipStyle={s.mobPip} wrapStyle={{height:'47vh'}} />
-      <ChatArea />
-      <Controls desk={false} />
+      {reportModal}
+      {blackWarnModal}
+
+      {/* Header */}
+      <div style={{ ...s.header, background: T.header, borderBottom: `1px solid ${T.headerBorder}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ ...s.logo, color: T.logo }} onClick={goHome}>
+            Ohm<span style={{ color: '#a855f7' }}>ingle</span>
+          </span>
+          <span style={{ background: isDark?'#1e293b':'#f1f5f9', color: T.subText, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20, border: `1px solid ${T.headerBorder}` }}>
+            👥 {strangerCount} met
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ ...s.online, color: T.subText }}><span style={s.dot}/>{onlineCount} online</span>
+          <button type="button" onClick={toggleTheme} style={{ background: 'transparent', border: `1px solid ${T.headerBorder}`, borderRadius: 20, padding: '4px 10px', fontSize: 16, cursor: 'pointer' }}>
+            {isDark ? '☀️' : '🌙'}
+          </button>
+        </div>
+      </div>
+
+      {/* ✅ Video — INLINED, not a component. remoteVideoRef preserved across re-renders */}
+      <div style={{ ...s.videoWrap, height: '47vh', flexShrink: 0 }}>
+        {/* Remote (stranger) = large, fills entire box, NOT mirrored */}
+        <video ref={remoteVideoRef} autoPlay playsInline style={s.remoteVid} />
+        {videoOverlay}
+        {interestBar}
+        {/* Local (you) = small PiP, mirrored (selfie view) */}
+        <div style={pipStyle}>
+          <video ref={setLocalVideoRef} autoPlay playsInline muted style={s.pipVid} />
+          <span style={s.youTxt}>{myFlag} You</span>
+        </div>
+        <div style={s.vBottom}>
+          <span style={s.brand}>Ohmingle.com</span>
+          <button type="button" style={s.flagBtn} onClick={() => setShowReport(true)}>🚩</button>
+        </div>
+      </div>
+
+      {/* Chat */}
+      <div style={{ ...s.chatBox, background: T.chat, border: `1px solid ${T.chatBorder}`, margin: '8px 10px', flex: 1 }}>
+        {messagesContent}
+      </div>
+
+      {/* Controls */}
+      <div style={{ padding: '8px 10px 12px', background: T.bar, borderTop: `1px solid ${T.barBorder}`, flexShrink: 0 }}>
+        {controlsContent}
+      </div>
     </div>
   );
 
-  /* ── DESKTOP ────────────────────────────────────────────────────────────── */
+  /* ── DESKTOP LAYOUT ─────────────────────────────────── */
   return (
-    <div style={{...s.page, background:T.page}}>
+    <div style={{ ...s.page, background: T.page }}>
       <style>{CSS}</style>
-      {showReport && <Modal onReport={reportStranger} onClose={() => setShowReport(false)} isDark={isDark} T={T}/>}
-      <Header />
+      {reportModal}
+      {blackWarnModal}
+
+      {/* Header */}
+      <div style={{ ...s.header, background: T.header, borderBottom: `1px solid ${T.headerBorder}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ ...s.logo, color: T.logo }} onClick={goHome}>
+            Ohm<span style={{ color: '#a855f7' }}>ingle</span>
+          </span>
+          <span style={{ background: isDark?'#1e293b':'#f1f5f9', color: T.subText, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20, border: `1px solid ${T.headerBorder}` }}>
+            👥 {strangerCount} met
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ ...s.online, color: T.subText }}><span style={s.dot}/>{onlineCount} online</span>
+          <button type="button" onClick={toggleTheme} style={{ background: 'transparent', border: `1px solid ${T.headerBorder}`, borderRadius: 20, padding: '4px 12px', fontSize: 16, cursor: 'pointer' }}>
+            {isDark ? '☀️' : '🌙'}
+          </button>
+        </div>
+      </div>
+
+      {/* Body */}
       <div style={s.deskBody}>
+
+        {/* Left — video */}
         <div style={s.deskLeft}>
-          <VideoArea pipStyle={s.deskPip} wrapStyle={{width:'100%', height:'100%'}} />
+          {/* ✅ Video INLINED — remoteVideoRef persists on re-renders */}
+          <div style={{ ...s.videoWrap, width: '100%', height: '100%' }}>
+            <video ref={remoteVideoRef} autoPlay playsInline style={s.remoteVid} />
+            {videoOverlay}
+            {interestBar}
+            <div style={pipStyle}>
+              <video ref={setLocalVideoRef} autoPlay playsInline muted style={s.pipVid} />
+              <span style={s.youTxt}>{myFlag} You</span>
+            </div>
+            <div style={s.vBottom}>
+              <span style={s.brand}>Ohmingle.com</span>
+              <button type="button" style={s.flagBtn} onClick={() => setShowReport(true)}>🚩</button>
+            </div>
+          </div>
         </div>
-        <div style={{...s.deskRight, background:T.chat}}>
-          <ChatArea style={{margin:0, borderRadius:0, border:'none', flex:1}} />
+
+        {/* Right — chat */}
+        <div style={{ ...s.deskRight, background: T.chat }}>
+          <div style={{ ...s.chatBox, border: 'none', borderRadius: 0, margin: 0, flex: 1 }}>
+            {messagesContent}
+          </div>
         </div>
+
       </div>
-      <Controls desk={true} />
-    </div>
-  );
-}
 
-/* ── Helper: country code to flag emoji ──────────────────────────────────── */
-function countryToFlag(code) {
-  return code.toUpperCase().split('').map(c =>
-    String.fromCodePoint(127397 + c.charCodeAt(0))
-  ).join('');
-}
-
-/* ── Modal ───────────────────────────────────────────────────────────────── */
-function Modal({ onReport, onClose, isDark, T }) {
-  const reasons = ['🔞 Nudity/Sexual Content','😠 Harassment','🤖 Spam/Bot','👶 Underage','⚠️ Other'];
-  return (
-    <div style={s.modalBg}>
-      <div style={{...s.modal, background: isDark?'#0f172a':'#fff', border:`1px solid ${T.headerBorder}`}}>
-        <h3 style={{...s.modalH, color:T.logo}}>🚩 Report Stranger</h3>
-        <p style={{...s.modalSub, color:T.subText}}>Why are you reporting?</p>
-        {reasons.map(r => (
-          <button key={r} style={{...s.modalOpt, background:T.bubble, color:T.text, border:`1px solid ${T.inputBorder}`}}
-            onClick={() => onReport(r)}>{r}</button>
-        ))}
-        <button style={{...s.modalCancel, color:T.subText, border:`1px solid ${T.inputBorder}`}}
-          onClick={onClose}>Cancel</button>
+      {/* Controls bar — full width */}
+      <div style={{ padding: '10px 18px 12px', background: T.bar, borderTop: `1px solid ${T.barBorder}`, flexShrink: 0 }}>
+        {controlsContent}
       </div>
     </div>
   );
 }
 
-/* ── CSS ─────────────────────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════
+   CSS
+══════════════════════════════════════════════════════ */
 const CSS = `
-  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes spin  { to { transform: rotate(360deg); } }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
   *, *::before, *::after { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; }
+  html, body { margin:0; padding:0; }
   input::placeholder { color: #475569; }
   input:focus { border-color: #7c3aed !important; outline: none; }
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  video { background: #111; display: block; }
 `;
 
-/* ── Styles ──────────────────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════
+   STYLES
+══════════════════════════════════════════════════════ */
 const s = {
+  /* Modal */
   modalBg:     { position:'fixed', inset:0, background:'rgba(0,0,0,0.8)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999 },
   modal:       { borderRadius:20, padding:24, width:300, display:'flex', flexDirection:'column', gap:10 },
   modalH:      { fontSize:18, fontWeight:800, textAlign:'center', margin:0 },
   modalSub:    { fontSize:13, textAlign:'center', margin:0 },
-  modalOpt:    { borderRadius:10, padding:'12px 16px', fontSize:14, cursor:'pointer', textAlign:'left' },
-  modalCancel: { background:'transparent', borderRadius:10, padding:10, fontSize:13, cursor:'pointer' },
+  modalOpt:    { borderRadius:10, padding:'12px 16px', fontSize:14, cursor:'pointer', textAlign:'left', border:'none' },
+  modalCancel: { background:'transparent', borderRadius:10, padding:10, fontSize:13, cursor:'pointer', border:'none' },
 
+  /* Page */
   page:     { position:'fixed', inset:0, display:'flex', flexDirection:'column', fontFamily:'system-ui,sans-serif', overflow:'hidden' },
   header:   { display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 16px', flexShrink:0 },
-  logo:     { fontSize:24, fontWeight:900, cursor:'pointer' },
+  logo:     { fontSize:24, fontWeight:900, cursor:'pointer', letterSpacing:-0.5 },
   online:   { display:'flex', alignItems:'center', gap:6, fontSize:13, fontWeight:600 },
   dot:      { width:8, height:8, background:'#22c55e', borderRadius:'50%', boxShadow:'0 0 6px #22c55e', display:'inline-block' },
 
-  videoWrap: { position:'relative', background:'#000', overflow:'hidden', flexShrink:0 },
-  remoteVid: { width:'100%', height:'100%', objectFit:'cover', display:'block', background:'#111' },
+  /* Video */
+  videoWrap: { position:'relative', background:'#000', overflow:'hidden' },
 
-  overlay:  { position:'absolute', inset:0, background:'rgba(0,0,0,0.8)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:8, zIndex:5 },
+  /* ✅ Remote video: NO transform — stranger's video shown naturally */
+  remoteVid: { width:'100%', height:'100%', objectFit:'cover' },
+
+  /* Overlay */
+  overlay:  { position:'absolute', inset:0, background:'rgba(0,0,0,0.8)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10, zIndex:5 },
   spinner:  { width:50, height:50, border:'4px solid rgba(168,85,247,0.2)', borderTopColor:'#a855f7', borderRadius:'50%', animation:'spin 0.9s linear infinite' },
   ovBig:    { color:'#fff', fontSize:20, fontWeight:700, margin:0, textAlign:'center' },
   ovSub:    { color:'#94a3b8', fontSize:13, margin:0, textAlign:'center' },
 
-  mobPip:   { position:'absolute', top:10, right:10, width:82, height:110, borderRadius:10, overflow:'hidden', border:'2.5px solid #7c3aed', boxShadow:'0 0 18px rgba(124,58,237,0.7)', zIndex:20, background:'#111' },
-  deskPip:  { position:'absolute', top:14, right:14, width:152, height:203, borderRadius:12, overflow:'hidden', border:'2.5px solid #7c3aed', boxShadow:'0 0 24px rgba(124,58,237,0.7)', zIndex:20, background:'#111' },
-  pipVid:   { width:'100%', height:'100%', objectFit:'cover', display:'block' },
+  /* PiP — local video, small, mirrored (selfie view) */
+  mobPip:   { position:'absolute', top:10, right:10, width:82,  height:110, borderRadius:10, overflow:'hidden', border:'2.5px solid #7c3aed', boxShadow:'0 0 18px rgba(124,58,237,0.7)', zIndex:20 },
+  deskPip:  { position:'absolute', top:14, right:14, width:152, height:203, borderRadius:12, overflow:'hidden', border:'2.5px solid #7c3aed', boxShadow:'0 0 24px rgba(124,58,237,0.7)', zIndex:20 },
+  /* ✅ Local video: transform scaleX(-1) = mirror/selfie for yourself only */
+  pipVid:   { width:'100%', height:'100%', objectFit:'cover', transform:'scaleX(-1)' },
   youTxt:   { position:'absolute', bottom:4, left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,0.75)', color:'#fff', fontSize:9, fontWeight:700, padding:'2px 8px', borderRadius:8, whiteSpace:'nowrap' },
 
+  /* Video bottom bar */
   vBottom:  { position:'absolute', bottom:0, left:0, right:0, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 14px', background:'linear-gradient(transparent,rgba(0,0,0,0.65))', zIndex:10 },
   brand:    { color:'#a855f7', fontWeight:800, fontSize:13 },
   flagBtn:  { background:'transparent', border:'none', fontSize:18, cursor:'pointer', padding:0 },
 
-  chatBox:  { flex:1, margin:'8px 10px', borderRadius:14, padding:'12px', overflowY:'auto', display:'flex', flexDirection:'column', gap:8, minHeight:0 },
+  /* Chat */
+  chatBox:  { flex:1, borderRadius:14, padding:'12px', overflowY:'auto', display:'flex', flexDirection:'column', gap:8, minHeight:0 },
   hint:     { fontSize:14, textAlign:'center', marginTop:20, lineHeight:1.6 },
   sysMsg:   { fontSize:12, textAlign:'center', fontStyle:'italic', margin:'3px 0' },
   bubble:   { padding:'9px 13px', borderRadius:14, maxWidth:'80%', fontSize:14, lineHeight:1.5, wordBreak:'break-word' },
   bName:    { fontSize:10, fontWeight:700, display:'block', marginBottom:3 },
 
-  nextBtn:  { background:'#22c55e', border:'none', borderRadius:12, padding:'0 18px', height:48, fontSize:14, fontWeight:700, color:'#fff', cursor:'pointer', flexShrink:0 },
-  stopBtn:  { background:'#ef4444', border:'none', borderRadius:12, width:48, height:48, fontSize:16, color:'#fff', cursor:'pointer', flexShrink:0 },
-  input:    { flex:1, borderRadius:12, padding:'0 16px', height:48, fontSize:14, outline:'none', minWidth:0 },
-  sendBtn:  { background:'#7c3aed', border:'none', borderRadius:12, width:48, height:48, fontSize:18, color:'#fff', cursor:'pointer', flexShrink:0 },
+  /* Buttons */
+  nextBtn:  { background:'#22c55e', border:'none', borderRadius:12, padding:'0 16px', height:46, fontSize:14, fontWeight:700, color:'#fff', cursor:'pointer', flexShrink:0 },
+  stopBtn:  { background:'#ef4444', border:'none', borderRadius:12, width:46, height:46, fontSize:16, color:'#fff', cursor:'pointer', flexShrink:0 },
+  input:    { flex:1, borderRadius:12, padding:'0 14px', height:46, fontSize:14, outline:'none', minWidth:0 },
+  sendBtn:  { background:'#7c3aed', border:'none', borderRadius:12, width:46, height:46, fontSize:18, color:'#fff', cursor:'pointer', flexShrink:0 },
 
+  /* Desktop */
   deskBody:  { flex:1, display:'flex', minHeight:0, overflow:'hidden' },
   deskLeft:  { flex:'0 0 66%', position:'relative', background:'#000', overflow:'hidden', borderRight:'1px solid #1e293b' },
   deskRight: { flex:1, display:'flex', flexDirection:'column', overflow:'hidden' },
 };
-
-export default ChatPage;
